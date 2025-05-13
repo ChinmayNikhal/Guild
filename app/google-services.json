@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "616564131624",
+    "project_id": "guild-6052a",
+    "storage_bucket": "guild-6052a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:616564131624:android:01b27a39fbcb432801321d",
+        "android_client_info": {
+          "package_name": "com.example.guild"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCiQnWf4C6x6dZyihbWuCOtbE69Ib9ueKc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

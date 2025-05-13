@@ -1,0 +1,162 @@
+// ... [All your imports remain unchanged]
+
+sealed class MainScreenState {
+    object DM : MainScreenState()
+    object Profile : MainScreenState()
+    object Friends : MainScreenState()
+    object Settings : MainScreenState()
+    object Groups : MainScreenState() // Added for new G button
+    data class Chat(val chatId: String, val otherUserId: String, val otherUsername: String) : MainScreenState()
+}
+
+@Composable
+fun MainScreen(
+    navController: NavController,
+    onLogout: () -> Unit,
+    onOpenChat: (String, String, String) -> Unit
+) {
+    var selectedScreen by remember { mutableStateOf<MainScreenState>(MainScreenState.DM) }
+
+    val chatViewModel: ChatViewModel = viewModel()
+    val messages by chatViewModel.messages.collectAsState(initial = emptyList())
+
+    Row(modifier = Modifier.fillMaxSize()) {
+        Sidebar(
+            selectedScreen = when (selectedScreen) {
+                is MainScreenState.DM -> "DM"
+                is MainScreenState.Profile -> "Profile"
+                is MainScreenState.Friends -> "Friends"
+                is MainScreenState.Settings -> "Settings"
+                is MainScreenState.Groups -> "Groups"
+                is MainScreenState.Chat -> "Chat"
+            },
+            onScreenSelected = { screen ->
+                selectedScreen = when (screen) {
+                    "DM" -> MainScreenState.DM
+                    "Friends" -> MainScreenState.Friends
+                    "Settings" -> MainScreenState.Settings
+                    "Profile" -> MainScreenState.Profile
+                    "Groups" -> MainScreenState.Groups
+                    else -> MainScreenState.DM
+                }
+            }
+        )
+
+        when (val screen = selectedScreen) {
+            is MainScreenState.DM -> DirectMessagesScreen(
+                onChatSelected = { chatId, otherUserId, otherUsername ->
+                    chatViewModel.listenForMessages(chatId)
+                    selectedScreen = MainScreenState.Chat(chatId, otherUserId, otherUsername)
+                }
+            )
+
+            is MainScreenState.Chat -> ChatScreen(
+                chatId = screen.chatId,
+                otherUserId = screen.otherUserId,
+                username = screen.otherUsername,
+                chatViewModel = chatViewModel
+            )
+
+            MainScreenState.Profile -> ProfileScreen(navController = navController)
+            MainScreenState.Friends -> FriendsScreen(authViewModel = viewModel())
+            MainScreenState.Settings -> SettingsScreen(onLogout = onLogout)
+
+            MainScreenState.Groups -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.DarkGray),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("Groups Page", color = Color.White, fontSize = 24.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun Sidebar(selectedScreen: String, onScreenSelected: (String) -> Unit) {
+    Column(
+        modifier = Modifier
+            .width(65.dp)
+            .fillMaxHeight()
+            .background(Color.DarkGray),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Box(
+            modifier = Modifier
+                .size(70.dp)
+                .padding(8.dp)
+                .background(Color.Gray, shape = CircleShape)
+                .clickable { onScreenSelected("DM") },
+            contentAlignment = Alignment.Center
+        ) {
+            Image(
+                painter = painterResource(id = R.drawable.ic_launcher_foreground),
+                contentDescription = "Guild App Logo",
+                modifier = Modifier.size(30.dp)
+            )
+        }
+
+        listOf("GC1", "GC2", "GC3").forEach { groupName ->
+            Box(
+                modifier = Modifier
+                    .size(60.dp)
+                    .padding(8.dp)
+                    .background(
+                        if (selectedScreen == groupName) Color.LightGray else Color.Gray,
+                        shape = CircleShape
+                    )
+                    .clickable { onScreenSelected(groupName) },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(groupName.take(2), fontSize = 12.sp, color = Color.White)
+            }
+        }
+
+        Spacer(modifier = Modifier.weight(1f))
+
+        val bottomButtons = listOf(
+            "P" to "Profile",
+            "F" to "Friends",
+            "G" to "Groups",
+            "S" to "Settings"
+        )
+
+        bottomButtons.forEach { (label, screenKey) ->
+            Box(
+                modifier = Modifier
+                    .size(60.dp)
+                    .padding(6.dp)
+                    .background(
+                        if (selectedScreen == screenKey) Color.Blue else Color.Gray,
+                        shape = CircleShape
+                    )
+                    .clickable { onScreenSelected(screenKey) },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(label, fontSize = 14.sp, color = Color.White)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
+
+@Composable
+fun GroupsScreen() {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Text("Groups Page", color = Color.White)
+    }
+}
+
+@Composable
+fun GroupChatsScreen() {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Text("Group Chats Page", color = Color.White)
+    }
+}
