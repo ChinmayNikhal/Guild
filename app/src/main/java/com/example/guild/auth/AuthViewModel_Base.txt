@@ -1,0 +1,376 @@
+package com.example.guild.auth
+
+import android.util.Log
+import androidx.compose.runtime.mutableStateListOf
+import androidx.lifecycle.ViewModel
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.FirebaseFirestore
+
+class AuthViewModel : ViewModel() {
+    private val firebaseAuth: FirebaseAuth = FirebaseAuth.getInstance()
+    private val firestore: FirebaseFirestore = FirebaseFirestore.getInstance()
+    val currentUserId: String?
+        get() = firebaseAuth.currentUser?.uid
+
+    val friendUsernames = mutableStateListOf<String>()
+    val friendRequestsUsernames = mutableStateListOf<Pair<String, String>>() // UID to username
+    val sentRequestsUsernames = mutableStateListOf<Pair<String, String>>() // UID to username
+
+    fun signUp(
+        email: String,
+        password: String,
+        username: String,
+        onSuccess: () -> Unit,
+        onFailure: (String) -> Unit
+    ) {
+        firebaseAuth.createUserWithEmailAndPassword(email, password)
+            .addOnCompleteListener { task ->
+                if (task.isSuccessful) {
+                    val uid = firebaseAuth.currentUser?.uid
+                    if (uid != null) {
+                        val userMap = hashMapOf(
+                            "uid" to uid,
+                            "email" to email,
+                            "username" to username,
+                            "about" to "",
+                            "status" to "Available",
+                            "mobile" to "",
+                            "gender" to "Other",
+                            "dob" to "",
+                            "color" to "#BB86FC",
+                            "friends" to listOf<String>(),
+                            "friendRequests" to listOf<String>(),
+                            "sentRequests" to listOf<String>()
+                        )
+                        firestore.collection("users").document(uid).set(userMap)
+                            .addOnSuccessListener { onSuccess() }
+                            .addOnFailureListener { e ->
+                                onFailure("Failed to save user data: ${e.message}")
+                            }
+                    } else {
+                        onFailure("User ID is null")
+                    }
+                } else {
+                    onFailure(task.exception?.message ?: "Signup failed")
+                }
+            }
+    }
+
+    fun login(email: String, password: String, onSuccess: () -> Unit, onFailure: (String) -> Unit) {
+        firebaseAuth.signInWithEmailAndPassword(email, password)
+            .addOnCompleteListener { task ->
+                if (task.isSuccessful) {
+                    loadFriendsAndRequests() // <- one-time load
+                    // Optionally also listen for real-time updates:
+                    listenToFriends()
+                    listenToFriendRequests()
+                    listenToSentRequests()
+                    onSuccess()
+                } else {
+                    onFailure(task.exception?.message ?: "Login failed")
+                }
+            }
+    }
+
+    fun signOut() {
+        firebaseAuth.signOut()
+        friendUsernames.clear()
+        friendRequestsUsernames.clear()
+        sentRequestsUsernames.clear()
+    }
+
+    fun saveProfile(
+        about: String,
+        status: String,
+        mobile: String,
+        gender: String,
+        dob: String,
+        onSuccess: () -> Unit,
+        onFailure: (String) -> Unit
+    ) {
+        val uid = firebaseAuth.currentUser?.uid
+        if (uid != null) {
+            val data = mapOf(
+                "about" to about,
+                "status" to status,
+                "mobile" to mobile,
+                "gender" to gender,
+                "dob" to dob
+            )
+            firestore.collection("users").document(uid)
+                .collection("profile").document("basic")
+                .set(data)
+                .addOnSuccessListener { onSuccess() }
+                .addOnFailureListener { e -> onFailure(e.message ?: "Failed to save profile") }
+        } else {
+            onFailure("User not logged in")
+        }
+    }
+
+    fun loadProfile(
+        onLoaded: (Map<String, Any>) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        val uid = firebaseAuth.currentUser?.uid
+        if (uid == null) {
+            onError("User not logged in")
+            return
+        }
+
+        firestore.collection("users").document(uid).get()
+            .addOnSuccessListener { document ->
+                if (document.exists()) {
+                    onLoaded(document.data ?: emptyMap())
+                } else {
+                    // Return default values for new users
+                    onLoaded(
+                        mapOf(
+                            "about" to "",
+                            "status" to "Available",
+                            "mobile" to "",
+                            "gender" to "Other",
+                            "dob" to "",
+                            "username" to firebaseAuth.currentUser?.email?.substringBefore("@").orEmpty()
+                        )
+                    )
+                }
+            }
+            .addOnFailureListener {
+                onError("Failed to load profile: ${it.message}")
+            }
+    }
+
+    fun listenToFriends() {
+        val uid = currentUserId ?: return
+        firestore.collection("users").document(uid)
+            .addSnapshotListener { snapshot, _ ->
+                if (snapshot == null || !snapshot.exists()) return@addSnapshotListener
+                val friendIds = snapshot.get("friends") as? List<String> ?: emptyList()
+                if (friendIds.isEmpty()) {
+                    friendUsernames.clear()
+                    return@addSnapshotListener
+                }
+                firestore.collection("users")
+                    .whereIn("uid", friendIds)
+                    .get()
+                    .addOnSuccessListener { querySnapshot ->
+                        friendUsernames.clear()
+                        friendUsernames.addAll(querySnapshot.documents.mapNotNull {
+                            it.getString("username")
+                        })
+                    }
+            }
+    }
+
+    fun listenToFriendRequests() {
+        val uid = currentUserId ?: return
+        firestore.collection("users").document(uid)
+            .addSnapshotListener { snapshot, _ ->
+                if (snapshot == null || !snapshot.exists()) return@addSnapshotListener
+                val requestIds = snapshot.get("friendRequests") as? List<String> ?: emptyList()
+                if (requestIds.isEmpty()) {
+                    friendRequestsUsernames.clear()
+                    return@addSnapshotListener
+                }
+                firestore.collection("users")
+                    .whereIn("uid", requestIds)
+                    .get()
+                    .addOnSuccessListener { querySnapshot ->
+                        friendRequestsUsernames.clear()
+                        querySnapshot.documents.forEach { doc ->
+                            val uname = doc.getString("username") ?: "Unknown"
+                            friendRequestsUsernames.add(doc.id to uname)
+                        }
+                    }
+            }
+    }
+
+    fun listenToSentRequests() {
+        val uid = currentUserId ?: return
+        firestore.collection("users").document(uid)
+            .addSnapshotListener { snapshot, _ ->
+                if (snapshot == null || !snapshot.exists()) return@addSnapshotListener
+                val sentIds = snapshot.get("sentRequests") as? List<String> ?: emptyList()
+                if (sentIds.isEmpty()) {
+                    sentRequestsUsernames.clear()
+                    return@addSnapshotListener
+                }
+                firestore.collection("users")
+                    .whereIn("uid", sentIds)
+                    .get()
+                    .addOnSuccessListener { querySnapshot ->
+                        sentRequestsUsernames.clear()
+                        querySnapshot.documents.forEach { doc ->
+                            val uname = doc.getString("username") ?: "Unknown"
+                            sentRequestsUsernames.add(doc.id to uname)
+                        }
+                    }
+            }
+    }
+
+    fun sendFriendRequest(
+        recipientUsername: String,
+        onSuccess: () -> Unit,
+        onFailure: (String) -> Unit
+    ) {
+        val senderUid = currentUserId ?: return onFailure("User not logged in")
+
+        firestore.collection("users")
+            .whereEqualTo("username", recipientUsername)
+            .get()
+            .addOnSuccessListener { querySnapshot ->
+                if (querySnapshot.isEmpty) {
+                    onFailure("User not found")
+                } else {
+                    val recipientDoc = querySnapshot.documents.first()
+                    val recipientId = recipientDoc.id
+
+                    firestore.runBatch { batch ->
+                        batch.update(
+                            firestore.collection("users").document(recipientId),
+                            "friendRequests", FieldValue.arrayUnion(senderUid)
+                        )
+                        batch.update(
+                            firestore.collection("users").document(senderUid),
+                            "sentRequests", FieldValue.arrayUnion(recipientId)
+                        )
+                    }.addOnSuccessListener { onSuccess() }
+                        .addOnFailureListener { e -> onFailure("Failed: ${e.message}") }
+                }
+            }
+            .addOnFailureListener { e -> onFailure("Failed to find user: ${e.message}") }
+    }
+
+    fun acceptFriendRequest(fromUid: String, onComplete: () -> Unit) {
+        val uid = currentUserId ?: return
+
+        val userRef = firestore.collection("users").document(uid)
+        val senderRef = firestore.collection("users").document(fromUid)
+
+        firestore.runBatch { batch ->
+            batch.update(userRef, "friends", FieldValue.arrayUnion(fromUid))
+            batch.update(senderRef, "friends", FieldValue.arrayUnion(uid))
+
+            batch.update(userRef, "friendRequests", FieldValue.arrayRemove(fromUid))
+            batch.update(senderRef, "sentRequests", FieldValue.arrayRemove(uid))
+        }.addOnSuccessListener { onComplete() }
+            .addOnFailureListener { Log.e("FriendRequest", "Failed: ${it.message}") }
+    }
+
+    fun rejectFriendRequest(fromUid: String, onComplete: () -> Unit) {
+        val uid = currentUserId ?: return
+
+        firestore.runBatch { batch ->
+            batch.update(
+                firestore.collection("users").document(uid),
+                "friendRequests", FieldValue.arrayRemove(fromUid)
+            )
+            batch.update(
+                firestore.collection("users").document(fromUid),
+                "sentRequests", FieldValue.arrayRemove(uid)
+            )
+        }.addOnSuccessListener { onComplete() }
+    }
+
+    fun loadFriendsAndRequests() {
+        val uid = currentUserId ?: return
+        firestore.collection("users").document(uid).get()
+            .addOnSuccessListener { doc ->
+                val data = doc.data ?: return@addOnSuccessListener
+                val friends = data["friends"] as? List<String> ?: emptyList()
+                val friendRequests = data["friendRequests"] as? List<String> ?: emptyList()
+                val sentRequests = data["sentRequests"] as? List<String> ?: emptyList()
+
+                friendUsernames.clear()
+                friendRequestsUsernames.clear()
+                sentRequestsUsernames.clear()
+
+                friends.forEach { fid ->
+                    fetchUsername(fid) { uname -> friendUsernames.add(uname) }
+                }
+                friendRequests.forEach { rid ->
+                    fetchUsername(rid) { uname -> friendRequestsUsernames.add(rid to uname) }
+                }
+                sentRequests.forEach { sid ->
+                    fetchUsername(sid) { uname -> sentRequestsUsernames.add(sid to uname) }
+                }
+            }
+    }
+
+    fun removeFriend(friendUid: String, onResult: (Boolean) -> Unit) {
+        val uid = currentUserId
+        if (uid == null) {
+            onResult(false)
+            return
+        }
+
+        val userRef = firestore.collection("users").document(uid)
+        val friendRef = firestore.collection("users").document(friendUid)
+
+        firestore.runBatch { batch ->
+            // Make sure these UIDs exactly match what's stored in Firestore
+            batch.update(userRef, "friends", FieldValue.arrayRemove(friendUid))
+            batch.update(friendRef, "friends", FieldValue.arrayRemove(uid))
+        }.addOnSuccessListener {
+            loadFriendsAndRequests() // Refresh
+            onResult(true)
+        }.addOnFailureListener { e ->
+            e.printStackTrace()
+            onResult(false)
+        }
+    }
+
+
+    private fun fetchUsername(uid: String, onResult: (String) -> Unit) {
+        firestore.collection("users").document(uid).get()
+            .addOnSuccessListener { doc ->
+                val uname = doc.getString("username") ?: "Unknown"
+                onResult(uname)
+            }
+    }
+}
+
+PROMPT
+
+oki lets work on the group messaging system. So the things I think we will need to do is
+-> Make a GroupChatScreen.kt
+-> Make a GroupViewSceen in MainScreen which is toggled by clicking on the sidebar
+-> Add the logic for it in ChatViewModel
+-> So everything similar to Direct Messages
+
+
+Lets change the sidebar before we move on to GroupChats oki,
+
+I want the side bars top most icon to be apps icon ofc,  and that directly leads to Direct Messages as before
+Below that lets make a Group Chat button, which leads to the main view changing and showing all the group chats im in
+Then at the bottom lets keep the following buttons of Profile, Friends, Groups, Settings
+Heres my MainScreen.kt which contains all about it
+Please give me the entire updated MainScreen.kt oki
+
+
+Oki lets implement a Groups Screen which is similar to to Friends. So ig we will have to decide on the structure of the logic in storage
+So I would like to use Realtime Database from Firebase oki. So it should be like
+Groups
+|_ GroupID
+    |_Group created timestamp
+    |_Group administrators/owner
+    |_Group members
+    |_Group Name
+    |_Group Description
+    |_Most recent message content
+    |_Most recent message timestamp
+    |_Messages
+        |_message time
+        |_message sender
+        |_message content
+        |_ttl
+Whenever a user creates a group lets make them the owner of the group, ofc they will have the privileges to add people to this group
+Can we implement the disappearing messages logic using Realtime Database? If possible lets do that
+
+
+Yeah lets do that. But wont I need a GroupChatScreen that will load all the messages? So yeah, make the GroupChatScreen similar to ChatScreen.kt which I have given the code of. I want it to load all the messages from the db, lets make it so that it has a + button to add attachment, a long text box and a send button.
+Then the list of messages that will be in a scrollable form.
+Each message shown will ofc have a small message sender name, message content and small timestamp.
+
+No, you are messing it up even though you understand what I mean to implement. It should be pretty similar to the Friends screen ok.  This lambda if I understand correctly is trying to create like an empty group and
