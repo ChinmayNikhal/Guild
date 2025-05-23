@@ -14,6 +14,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.guild.groupResources.GroupChatScreen
 import com.example.guild.groupResources.GroupData
 import com.example.guild.groupResources.GroupViewModel
 import com.google.firebase.auth.FirebaseAuth
@@ -30,38 +31,42 @@ fun GroupManageScreen(groupViewModel: GroupViewModel) {
     var groupName by remember { mutableStateOf(TextFieldValue("")) }
     var groupDescription by remember { mutableStateOf(TextFieldValue("")) }
 
-    // Load groups on screen entry
+    // 👇 State to track selected group for messaging
+    var selectedGroup by remember { mutableStateOf<GroupData?>(null) }
+
+    // Load groups when screen is entered
     LaunchedEffect(userId) {
         if (userId != null) {
             groupViewModel.loadUserGroups(userId)
         }
     }
 
+    // 👇 Show GroupChatScreen if a group is selected
+    selectedGroup?.let { group ->
+        GroupChatScreen(
+            groupId = group.groupId,
+            groupName = group.name,
+            groupViewModel = groupViewModel
+        )
+        return  // Skip rendering the rest of the UI
+    }
+
+    // 👇 Original UI for group management
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(16.dp)
         ) {
-            // Top row with "Groups" label
-            Text(
-                text = "Groups",
-                fontSize = 24.sp,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-
+            Text("Groups", fontSize = 24.sp, color = MaterialTheme.colorScheme.onBackground)
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Row of buttons
             Row(
-                modifier = Modifier
-                    .fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Button(
-                    onClick = {
-                        // TODO: Add Join Group logic here
-                    },
+                    onClick = { /* TODO: Join logic */ },
                     modifier = Modifier.weight(1f)
                 ) {
                     Text("Join Group")
@@ -80,32 +85,30 @@ fun GroupManageScreen(groupViewModel: GroupViewModel) {
             Spacer(modifier = Modifier.height(16.dp))
 
             if (userGroups.isEmpty()) {
-                Text(
-                    text = "Loading Groups...",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 16.sp
-                )
+                Text("Loading Groups...", color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
                 LazyColumn {
                     items(userGroups) { group ->
                         GroupCard(
                             groupData = group,
-                            onLeaveGroup = { groupId -> groupViewModel.leaveGroup(groupId) }
+                            onLeaveGroup = { groupId -> groupViewModel.leaveGroup(groupId) },
+                            onMessageGroup = { selectedGroup = it }  // 👈 callback to set the selected group
                         )
                     }
                 }
             }
         }
 
+        // Dialog for creating a new group
         if (showCreateDialog) {
             AlertDialog(
                 onDismissRequest = { showCreateDialog = false },
                 confirmButton = {
                     TextButton(onClick = {
                         val name = groupName.text.trim()
-                        val description = groupDescription.text.trim()
+                        val desc = groupDescription.text.trim()
                         if (name.isNotEmpty()) {
-                            groupViewModel.createGroup(name, description)
+                            groupViewModel.createGroup(name, desc)
                             groupName = TextFieldValue("")
                             groupDescription = TextFieldValue("")
                             showCreateDialog = false
@@ -147,7 +150,11 @@ fun GroupManageScreen(groupViewModel: GroupViewModel) {
 }
 
 @Composable
-fun GroupCard(groupData: GroupData, onLeaveGroup: (String) -> Unit) {
+fun GroupCard(
+    groupData: GroupData,
+    onLeaveGroup: (String) -> Unit,
+    onMessageGroup: (GroupData) -> Unit  // 👈 New parameter
+) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -163,24 +170,18 @@ fun GroupCard(groupData: GroupData, onLeaveGroup: (String) -> Unit) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = groupData.name,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontSize = 18.sp
-                    )
+                    Text(groupData.name, color = MaterialTheme.colorScheme.onSurface, fontSize = 18.sp)
                     if (groupData.description.isNotBlank()) {
                         Text(
-                            text = groupData.description,
+                            groupData.description,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 14.sp,
-                            maxLines = 1,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            maxLines = 1
                         )
                     }
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // Leave Group Button (X)
                     IconButton(
                         onClick = { onLeaveGroup(groupData.groupId) },
                         colors = IconButtonDefaults.iconButtonColors(
@@ -191,11 +192,8 @@ fun GroupCard(groupData: GroupData, onLeaveGroup: (String) -> Unit) {
                         Text("❌", fontSize = 14.sp)
                     }
 
-                    // Message Button
                     IconButton(
-                        onClick = {
-                            // TODO: Navigate to group chat screen
-                        },
+                        onClick = { onMessageGroup(groupData) },  // 👈 Trigger navigation
                         colors = IconButtonDefaults.iconButtonColors(
                             containerColor = MaterialTheme.colorScheme.primaryContainer,
                             contentColor = MaterialTheme.colorScheme.onPrimaryContainer
@@ -206,11 +204,10 @@ fun GroupCard(groupData: GroupData, onLeaveGroup: (String) -> Unit) {
                 }
             }
 
-            // Latest message (optional)
             if (groupData.mostRecentMessage.isNotBlank()) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Latest: ${groupData.mostRecentMessage}",
+                    "Latest: ${groupData.mostRecentMessage}",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 12.sp
                 )
