@@ -26,8 +26,9 @@ import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
 import com.example.guild.R
 import com.example.guild.chatResources.ChatMessage
-import com.example.guild.chatResources.ChatScreen
 import com.example.guild.chatResources.ChatViewModel
+import com.example.guild.chatResources.ChatScreen
+import com.example.guild.groupResources.GroupViewModel
 import com.example.guild.ui.GroupManageScreen
 import com.example.guild.ui.MainScreenState.*
 import com.example.guild.ui.theme.GuildTheme
@@ -54,71 +55,55 @@ fun MainScreen(
     var selectedScreen by remember { mutableStateOf<MainScreenState>(MainScreenState.DM) }
 
     val chatViewModel: ChatViewModel = viewModel()
+    val groupViewModel: GroupViewModel = viewModel()
     val messages by chatViewModel.messages.collectAsState(initial = emptyList())
 
     Row(modifier = Modifier.fillMaxSize()) {
         Sidebar(
             selectedScreen = when (selectedScreen) {
-                is MainScreenState.DM -> "DM"
-                is MainScreenState.Profile -> "Profile"
-                is MainScreenState.Friends -> "Friends"
+                is DM -> "DM"
+                is Profile -> "Profile"
+                is Friends -> "Friends"
                 is MainScreenState.Settings -> "Settings"
-                is MainScreenState.Groups -> "Groups"
-                is MainScreenState.Chat -> "Chat"
-                is MainScreenState.GroupManage-> "GroupManage"
-                is MainScreenState.GroupChat -> TODO()
+                is Groups -> TODO()
+                is Chat -> "Chat"
+                is GroupManage-> "GroupManage"
+                is GroupChat -> TODO()
             },
             onScreenSelected = { screen ->
                 selectedScreen = when (screen) {
-                    "DM" -> MainScreenState.DM
-                    "Friends" -> MainScreenState.Friends
+                    "DM" -> DM
+                    "Friends" -> Friends
                     "Settings" -> MainScreenState.Settings
-                    "Profile" -> MainScreenState.Profile
-                    "Groups" -> MainScreenState.Groups
-                    "GroupManage" -> MainScreenState.GroupManage
-                    else -> MainScreenState.DM
+                    "Profile" -> Profile
+                    "GroupManage" -> GroupManage
+
+                    else -> DM
                 }
             }
         )
 
         when (val screen = selectedScreen) {
-            is MainScreenState.DM -> DirectMessagesScreen(
+            is DM -> DirectMessagesScreen(
                 onChatSelected = { chatId, otherUserId, otherUsername ->
                     chatViewModel.listenForMessages(chatId)
                     selectedScreen = Chat(chatId, otherUserId, otherUsername)
                 }
             )
 
-            is MainScreenState.Chat -> ChatScreen(
+            is Chat -> ChatScreen(
                 chatId = screen.chatId,
                 otherUserId = screen.otherUserId,
                 username = screen.otherUsername,
                 chatViewModel = chatViewModel
             )
 
-            MainScreenState.Profile -> ProfileScreen(navController = navController)
-            MainScreenState.Friends -> FriendsScreen(authViewModel = viewModel())
-
-            MainScreenState.GroupManage -> GroupManageScreen(
-                onOpenGroupChat = { groupId, groupName ->
-                    selectedScreen = MainScreenState.GroupChat(groupId, groupName)
-                }
-            )
-
+            Profile -> ProfileScreen(navController = navController)
+            Friends -> FriendsScreen(authViewModel = viewModel())
+            GroupManage -> GroupManageScreen(groupViewModel = groupViewModel)
             MainScreenState.Settings -> SettingsScreen(onLogout = onLogout)
-
-            MainScreenState.Groups -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.DarkGray),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("Groups Page", color = Color.White, fontSize = 24.sp)
-                }
-            }
-
-            is MainScreenState.GroupChat -> TODO()
+            Groups -> TODO()
+            is GroupChat -> TODO()
         }
     }
 }
@@ -322,20 +307,3 @@ fun Sidebar(selectedScreen: String, onScreenSelected: (String) -> Unit) {
         Spacer(modifier = Modifier.height(10.dp))
     }
 }
-
-
-@Composable
-fun GroupsScreen() {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text("Groups Page", color = Color.White)
-    }
-}
-
-@Composable
-fun GroupChatsScreen() {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text("Group Chats Page", color = Color.White)
-    }
-}
-
-// DateRange  Menu  Person  AccountBox

@@ -8,7 +8,7 @@ import androidx.navigation.navArgument
 import com.example.guild.auth.AuthViewModel
 import com.example.guild.chatResources.ChatScreen
 import com.example.guild.chatResources.ChatViewModel
-import com.example.guild.chatResources.GroupChatScreen
+import com.example.guild.groupResources.GroupViewModel
 import com.example.guild.ui.*
 
 @Composable
@@ -42,6 +42,7 @@ fun AppNavHost(startDestination: String) {
                 }
             )
         }
+
         composable("profile") {
             ProfileScreen(navController, authViewModel)
         }
@@ -70,19 +71,6 @@ fun AppNavHost(startDestination: String) {
                 username = otherUsername,
                 chatViewModel = chatViewModel
             )
-        }
-
-        composable(
-            route = "groupchat/{groupId}/{groupName}",
-            arguments = listOf(
-                navArgument("groupId") { type = NavType.StringType },
-                navArgument("groupName") { type = NavType.StringType }
-            )
-        ) { backStackEntry ->
-            val groupId = backStackEntry.arguments?.getString("groupId") ?: return@composable
-            val groupName = backStackEntry.arguments?.getString("groupName") ?: "Unknown"
-
-            GroupChatScreen(groupId = groupId, groupName = groupName, chatViewModel = chatViewModel)
         }
 
     }

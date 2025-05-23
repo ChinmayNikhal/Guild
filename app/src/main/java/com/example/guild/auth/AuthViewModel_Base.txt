@@ -373,4 +373,630 @@ Yeah lets do that. But wont I need a GroupChatScreen that will load all the mess
 Then the list of messages that will be in a scrollable form.
 Each message shown will ofc have a small message sender name, message content and small timestamp.
 
-No, you are messing it up even though you understand what I mean to implement. It should be pretty similar to the Friends screen ok.  This lambda if I understand correctly is trying to create like an empty group and
+Oki lets implement a Groups Screen which is similar to to Friends. So ig we will have to decide on the structure of the logic in storage
+So I would like to use Firestore from Firebase oki. So it should be like
+Groups
+|_ GroupID
+    |_Group created timestamp
+    |_Group administrators/owner
+    |_Group members
+    |_Group Name
+    |_Group Description
+    |_Most recent message content
+    |_Most recent message timestamp
+    |_Messages
+        |_message time
+        |_message sender
+        |_message content
+        |_ttl
+Whenever a user creates a group lets make them the owner of the group, ofc they will have the privileges to add people to this group
+Can we implement the disappearing messages logic using Firestore? If possible lets do that
+
+here is some stuff that I have already have created
+
+GroupData data model
+package com.example.guild.chatResources
+
+data class GroupData(
+    val groupId: String = "",
+    val name: String = "",
+    val description: String = "",
+    val mostRecentMessage: String = "",
+    val mostRecentTimestamp: Long = 0L
+)
+
+A GroupChatScreen which loads all the messages between the group members :
+
+package com.example.guild.chatResources
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import java.text.SimpleDateFormat
+import java.util.*
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun GroupChatScreen(
+    groupId: String,
+    groupName: String,
+    chatViewModel: ChatViewModel = viewModel()
+) {
+    val messages by chatViewModel.messages.collectAsState()
+    val senderUsernames by remember { derivedStateOf { chatViewModel.senderUsernames } }
+    val listState = rememberLazyListState()
+
+    var messageText by remember { mutableStateOf("") }
+
+    // Fetch group messages
+    LaunchedEffect(groupId) {
+        chatViewModel.listenForGroupMessages(groupId)
+    }
+
+    // Auto-scroll to bottom
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.lastIndex)
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF121212))
+    ) {
+        // Top App Bar
+        TopAppBar(
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(Color(0xFF03DAC5), shape = CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = groupName.take(1).uppercase(),
+                            color = Color.Black,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(text = groupName, color = Color.White)
+                }
+            },
+            actions = {
+                IconButton(onClick = { /* menu */ }) {
+                    Icon(Icons.Default.MoreVert, contentDescription = "Menu", tint = Color.White)
+                }
+            },
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF1F1F1F))
+        )
+
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .weight(1f)
+                .padding(12.dp)
+        ) {
+            items(messages) { msg ->
+                val senderName = senderUsernames[msg.senderId] ?: msg.senderId
+                Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                    Text(text = senderName, fontSize = 12.sp, color = Color.Gray)
+                    Text(text = msg.text, fontSize = 16.sp, color = Color.White)
+                    Text(
+                        text = SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date(msg.timestamp)),
+                        fontSize = 10.sp,
+                        color = Color.Gray
+                    )
+                }
+            }
+        }
+
+        // Message input
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF1F1F1F))
+                .padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = { /* add attachment */ }) {
+                Text("+", color = Color.White, fontSize = 20.sp)
+            }
+            OutlinedTextField(
+                value = messageText,
+                onValueChange = { messageText = it },
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 4.dp),
+                placeholder = { Text("Type a message...", color = Color.Gray) },
+                shape = RoundedCornerShape(20.dp)
+            )
+            Button(onClick = {
+                if (messageText.isNotBlank()) {
+                    chatViewModel.sendGroupMessage(groupId, messageText.trim())
+                    messageText = ""
+                }
+            }) {
+                Text("Send")
+            }
+        }
+    }
+}
+
+And I made some changes in ChatViewModel to add these Group implementations features
+
+package com.example.guild.chatResources
+
+import androidx.compose.runtime.*
+import android.util.Log
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.lifecycle.ViewModel
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.Query
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.tasks.await
+import java.util.UUID
+
+class ChatViewModel : ViewModel() {
+
+    private val firestore = FirebaseFirestore.getInstance()
+    private val auth = FirebaseAuth.getInstance()
+
+    val chatPreviews = mutableStateListOf<ChatPreview>()
+    private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
+    val messages: StateFlow<List<ChatMessage>> = _messages
+
+    private val _messagesFlow = MutableStateFlow<List<ChatMessage>>(emptyList())
+    val messagesFlow: StateFlow<List<ChatMessage>> = _messagesFlow
+
+    private val _senderUsernames = mutableStateMapOf<String, String>()
+    val senderUsernames: Map<String, String> = _senderUsernames
+
+    private val _chatPartnerName = mutableStateOf("Unknown")
+    val chatPartnerName: State<String> get() = _chatPartnerName
+
+    private val realtimeDb = FirebaseDatabase.getInstance()
+    val userGroups = mutableStateListOf<GroupData>()
+
+    fun listenForMessages(chatId: String) {
+        firestore.collection("chats")
+            .document(chatId)
+            .collection("messages")
+            .orderBy("timestamp")
+            .addSnapshotListener { snapshot, e ->
+                if (e != null) {
+                    Log.w("ChatViewModel", "Listen failed", e)
+                    return@addSnapshotListener
+                }
+
+                val msgs = snapshot?.documents?.mapNotNull { doc ->
+                    doc.toObject(ChatMessage::class.java)
+                } ?: emptyList()
+
+                // Fetch usernames for all unique senderIds
+                msgs.map { it.senderId }.distinct().forEach { senderId ->
+                    fetchUsernameFor(senderId)
+                }
+
+                _messages.value = msgs
+            }
+    }
+
+
+    fun sendMessage(chatId: String, text: String) {
+        val messageId = UUID.randomUUID().toString()
+        val message = ChatMessage(
+            messageId = messageId,
+            senderId = auth.currentUser?.uid ?: "unknown",
+            text = text,
+            timestamp = System.currentTimeMillis()
+        )
+
+        firestore.collection("chats")
+            .document(chatId)
+            .collection("messages")
+            .document(messageId)
+            .set(message)
+    }
+
+    fun loadUserChats() {
+        val currentUserId = auth.currentUser?.uid ?: return
+
+        firestore.collection("chats")
+            .whereArrayContains("participants", currentUserId)
+            .addSnapshotListener { snapshot, e ->
+                if (e != null) {
+                    Log.w("ChatViewModel", "Failed to load chats", e)
+                    return@addSnapshotListener
+                }
+
+                chatPreviews.clear()
+
+                snapshot?.documents?.forEach { doc ->
+                    val chatId = doc.id
+                    val participants = doc.get("participants") as? List<String> ?: return@forEach
+                    val lastMessage = doc.get("lastMessage") as? String ?: ""
+
+                    val otherUserId = participants.firstOrNull { it != currentUserId } ?: return@forEach
+
+                    // Fetch the username of the other participant
+                    firestore.collection("users")
+                        .document(otherUserId)
+                        .get()
+                        .addOnSuccessListener { userDoc ->
+                            val username = userDoc.getString("username") ?: "Unknown"
+
+                            chatPreviews.add(
+                                ChatPreview(
+                                    chatId = chatId,
+                                    otherUserId = otherUserId,
+                                    otherUsername = username,
+                                    lastMessage = lastMessage
+                                )
+                            )
+                        }
+                }
+            }
+    }
+
+    fun startOrNavigateToChatWith(
+        otherUserId: String,
+        onSuccess: (chatId: String, otherUsername: String) -> Unit,
+        onFailure: (String) -> Unit
+    ) {
+        val currentUserId = FirebaseAuth.getInstance().currentUser?.uid ?: run {
+            onFailure("User not logged in.")
+            return
+        }
+
+        val chatId = listOf(currentUserId, otherUserId).sorted().joinToString("_")
+        val chatRef = firestore.collection("chats").document(chatId)
+
+        chatRef.get().addOnSuccessListener { doc ->
+            if (!doc.exists()) {
+                // Chat doesn't exist (maybe due to error), create fallback
+                val chatData = hashMapOf(
+                    "participants" to listOf(currentUserId, otherUserId),
+                    "lastTimestamp" to FieldValue.serverTimestamp()
+                )
+                chatRef.set(chatData).addOnSuccessListener {
+                    fetchUsernameAndNavigate(otherUserId, chatId, onSuccess, onFailure)
+                }
+            } else {
+                fetchUsernameAndNavigate(otherUserId, chatId, onSuccess, onFailure)
+            }
+        }.addOnFailureListener {
+            onFailure("Failed to retrieve chat.")
+        }
+    }
+
+    private fun fetchUsernameAndNavigate(
+        otherUserId: String,
+        chatId: String,
+        onSuccess: (chatId: String, otherUsername: String) -> Unit,
+        onFailure: (String) -> Unit
+    ) {
+        firestore.collection("users").document(otherUserId)
+            .get()
+            .addOnSuccessListener { doc ->
+                val username = doc.getString("username") ?: "Unknown"
+                onSuccess(chatId, username)
+            }
+            .addOnFailureListener {
+                onFailure("Failed to get user info.")
+            }
+    }
+
+    private fun fetchUsernameFor(senderId: String) {
+        if (_senderUsernames.containsKey(senderId)) return
+
+        firestore.collection("users")
+            .document(senderId)
+            .get()
+            .addOnSuccessListener { document ->
+                val username = document.getString("username") ?: senderId
+                _senderUsernames[senderId] = username
+            }
+    }
+
+    fun fetchChatPartnerName(userId: String) {
+        firestore.collection("users")
+            .document(userId)
+            .get()
+            .addOnSuccessListener { document ->
+                val username = document.getString("username")
+                if (!username.isNullOrBlank()) {
+                    _chatPartnerName.value = username
+                }
+            }
+    }
+
+    fun createGroup(name: String, description: String) {
+        val groupId = UUID.randomUUID().toString()
+        val currentUser = auth.currentUser ?: return
+        val userId = currentUser.uid
+
+        // 1. Push to Realtime Database
+        val groupRef = realtimeDb.getReference("Groups").child(groupId)
+        val groupData = mapOf(
+            "groupName" to name,
+            "groupDescription" to description,
+            "groupCreatedTimestamp" to System.currentTimeMillis(),
+            "owner" to userId,
+            "members" to mapOf(userId to true),
+            "mostRecentMessageContent" to "",
+            "mostRecentMessageTimestamp" to 0L
+        )
+
+        groupRef.setValue(groupData).addOnSuccessListener {
+            Log.d("ChatViewModel", "Group pushed to Realtime DB: $groupId")
+
+            // 2. Append groupId to Firestore `groups` field (create array if needed)
+            val userDocRef = firestore.collection("users").document(userId)
+            userDocRef.get().addOnSuccessListener { snapshot ->
+                if (snapshot.exists()) {
+                    // Use FieldValue.arrayUnion to safely add groupId
+                    userDocRef.update("groups", FieldValue.arrayUnion(groupId))
+                        .addOnSuccessListener {
+                            Log.d("ChatViewModel", "Group added to user Firestore profile")
+                            // Optional: Reload the group list immediately
+                            loadUserGroups()
+                        }
+                        .addOnFailureListener {
+                            Log.e("ChatViewModel", "Failed to add group to Firestore: ${it.message}")
+                        }
+                } else {
+                    Log.w("ChatViewModel", "User document not found in Firestore")
+                }
+            }.addOnFailureListener {
+                Log.e("ChatViewModel", "Error accessing user Firestore doc: ${it.message}")
+            }
+        }.addOnFailureListener {
+            Log.e("ChatViewModel", "Failed to create group in Realtime DB: ${it.message}")
+        }
+    }
+
+
+    fun loadUserGroups() {
+        val userId = auth.currentUser?.uid ?: return
+
+        firestore.collection("users").document(userId).get()
+            .addOnSuccessListener { doc ->
+                val groupIds = doc.get("groups") as? List<String> ?: return@addOnSuccessListener
+                userGroups.clear()
+
+                groupIds.forEach { groupId ->
+                    realtimeDb.getReference("Groups").child(groupId)
+                        .get()
+                        .addOnSuccessListener { snapshot ->
+                            val name = snapshot.child("groupName").getValue(String::class.java) ?: "Unnamed"
+                            val description = snapshot.child("groupDescription").getValue(String::class.java) ?: ""
+                            val recentMsg = snapshot.child("mostRecentMessageContent").getValue(String::class.java) ?: ""
+                            val recentTs = snapshot.child("mostRecentMessageTimestamp").getValue(Long::class.java) ?: 0L
+
+                            userGroups.add(
+                                GroupData(
+                                    groupId = groupId,
+                                    name = name,
+                                    description = description,
+                                    mostRecentMessage = recentMsg,
+                                    mostRecentTimestamp = recentTs
+                                )
+                            )
+                        }
+                }
+            }
+    }
+
+    fun leaveGroup(groupId: String) {
+        val userId = auth.currentUser?.uid ?: return
+
+        // Remove from group members
+        realtimeDb.getReference("Groups").child(groupId).child("members").child(userId).removeValue()
+
+        // Remove from Firestore
+        firestore.collection("users").document(userId)
+            .update("groups", FieldValue.arrayRemove(groupId))
+
+        // Remove locally
+        userGroups.removeAll { it.groupId == groupId }
+    }
+
+    fun listenForGroupMessages(groupId: String) {
+        realtimeDb.getReference("Groups")
+            .child(groupId)
+            .child("messages")
+            .orderByChild("timestamp")
+            .addValueEventListener(object : com.google.firebase.database.ValueEventListener {
+                override fun onDataChange(snapshot: com.google.firebase.database.DataSnapshot) {
+                    val msgs = snapshot.children.mapNotNull { it.getValue(ChatMessage::class.java) }
+                    _messages.value = msgs
+
+                    // Cache usernames
+                    msgs.map { it.senderId }.distinct().forEach { fetchUsernameFor(it) }
+                }
+
+                override fun onCancelled(error: com.google.firebase.database.DatabaseError) {
+                    Log.w("ChatViewModel", "Failed to load group messages", error.toException())
+                }
+            })
+    }
+
+    fun sendGroupMessage(groupId: String, text: String) {
+        val senderId = auth.currentUser?.uid ?: return
+        val messageId = UUID.randomUUID().toString()
+        val timestamp = System.currentTimeMillis()
+
+        val message = ChatMessage(
+            messageId = messageId,
+            senderId = senderId,
+            text = text,
+            timestamp = timestamp
+        )
+
+        val groupMessagesRef = realtimeDb.getReference("Groups")
+            .child(groupId)
+            .child("messages")
+            .child(messageId)
+
+        groupMessagesRef.setValue(message)
+
+        // Update metadata for most recent message
+        val groupRef = realtimeDb.getReference("Groups").child(groupId)
+        groupRef.child("mostRecentMessageContent").setValue(text)
+        groupRef.child("mostRecentMessageTimestamp").setValue(timestamp)
+    }
+
+
+}
+
+and finally a GroupManageScreen to join and create groups
+
+package com.example.guild.ui
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.guild.chatResources.ChatViewModel
+import com.example.guild.chatResources.GroupData
+
+@Composable
+fun GroupManageScreen(
+    chatViewModel: ChatViewModel = viewModel(),
+    onOpenGroupChat: (String, String) -> Unit
+) {
+    var groupName by remember { mutableStateOf("") }
+    var groupDescription by remember { mutableStateOf("") }
+
+    // Load user groups on first composition
+    LaunchedEffect(Unit) {
+        chatViewModel.loadUserGroups()
+    }
+
+    Column(modifier = Modifier
+        .fillMaxSize()
+        .padding(16.dp)) {
+
+        Text("Create a New Group", style = MaterialTheme.typography.titleMedium)
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        OutlinedTextField(
+            value = groupName,
+            onValueChange = { groupName = it },
+            label = { Text("Group Name") },
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        OutlinedTextField(
+            value = groupDescription,
+            onValueChange = { groupDescription = it },
+            label = { Text("Group Description") },
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Button(
+            onClick = {
+                if (groupName.isNotBlank()) {
+                    chatViewModel.createGroup(groupName.trim(), groupDescription.trim())
+                    groupName = ""
+                    groupDescription = ""
+                }
+            },
+            modifier = Modifier.align(Alignment.End)
+        ) {
+            Text("Add +")
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Text("Your Groups", style = MaterialTheme.typography.titleMedium)
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            items(chatViewModel.userGroups) { group ->
+                GroupListItem(
+                    group = group,
+                    onLeave = { chatViewModel.leaveGroup(group.groupId) },
+                    onMessage = {
+                        onOpenGroupChat(group.groupId, group.name)
+                    }
+                )
+                Divider()
+            }
+        }
+    }
+}
+
+@Composable
+fun GroupListItem(
+    group: GroupData,
+    onLeave: () -> Unit,
+    onMessage: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = group.name,
+                style = MaterialTheme.typography.titleMedium
+            )
+            Text(
+                text = group.description,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        Spacer(modifier = Modifier.width(8.dp))
+
+        Button(onClick = onMessage) {
+            Text("Message")
+        }
+
+        Spacer(modifier = Modifier.width(8.dp))
+
+        OutlinedButton(onClick = onLeave) {
+            Text("Leave")
+        }
+    }
+}
