@@ -26,32 +26,32 @@ fun GroupManageScreen(groupViewModel: GroupViewModel) {
     val userId = currentUser?.uid
 
     val userGroups by remember { derivedStateOf { groupViewModel.userGroups } }
+    val groupInvites by remember { derivedStateOf { groupViewModel.groupInvites } }
 
+    var selectedGroup by remember { mutableStateOf<GroupData?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
+    var showJoinDialog by remember { mutableStateOf(false) }
+    var showInvitesDialog by remember { mutableStateOf(false) }
+
     var groupName by remember { mutableStateOf(TextFieldValue("")) }
     var groupDescription by remember { mutableStateOf(TextFieldValue("")) }
+    var joinGroupId by remember { mutableStateOf(TextFieldValue("")) }
 
-    // 👇 State to track selected group for messaging
-    var selectedGroup by remember { mutableStateOf<GroupData?>(null) }
-
-    // Load groups when screen is entered
     LaunchedEffect(userId) {
-        if (userId != null) {
-            groupViewModel.loadUserGroups(userId)
+        userId?.let {
+            groupViewModel.loadUserGroups(it)
         }
     }
 
-    // 👇 Show GroupChatScreen if a group is selected
     selectedGroup?.let { group ->
         GroupChatScreen(
             groupId = group.groupId,
             groupName = group.name,
             groupViewModel = groupViewModel
         )
-        return  // Skip rendering the rest of the UI
+        return
     }
 
-    // 👇 Original UI for group management
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
@@ -61,45 +61,66 @@ fun GroupManageScreen(groupViewModel: GroupViewModel) {
             Text("Groups", fontSize = 24.sp, color = MaterialTheme.colorScheme.onBackground)
             Spacer(modifier = Modifier.height(12.dp))
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Button(
-                    onClick = { /* TODO: Join logic */ },
-                    modifier = Modifier.weight(1f)
+                // Row 1: Join + Create
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text("Join Group")
+                    Button(
+                        onClick = { showJoinDialog = true },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Join Group")
+                    }
+
+                    Button(
+                        onClick = { showCreateDialog = true },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Create Group")
+                    }
                 }
 
-                Button(
-                    onClick = { showCreateDialog = true },
-                    modifier = Modifier.weight(1f)
+                // Row 2: View Invites + Blank
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = "Add Group")
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Create Group")
+                    Button(
+                        onClick = { showInvitesDialog = true },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("View Invites")
+                    }
+
+                    // Invisible spacer to maintain uniformity
+                    Spacer(modifier = Modifier.weight(1f))
                 }
             }
+
 
             Spacer(modifier = Modifier.height(16.dp))
 
             if (userGroups.isEmpty()) {
-                Text("Loading Groups...", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("No groups joined yet.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
                 LazyColumn {
                     items(userGroups) { group ->
                         GroupCard(
                             groupData = group,
                             onLeaveGroup = { groupId -> groupViewModel.leaveGroup(groupId) },
-                            onMessageGroup = { selectedGroup = it }  // 👈 callback to set the selected group
+                            onMessageGroup = { selectedGroup = it }
                         )
                     }
                 }
             }
         }
 
-        // Dialog for creating a new group
+        // Create Group Dialog
         if (showCreateDialog) {
             AlertDialog(
                 onDismissRequest = { showCreateDialog = false },
@@ -140,9 +161,93 @@ fun GroupManageScreen(groupViewModel: GroupViewModel) {
                         )
                     }
                 },
-                containerColor = MaterialTheme.colorScheme.surface,
-                titleContentColor = MaterialTheme.colorScheme.onSurface,
-                textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                shape = RoundedCornerShape(16.dp)
+            )
+        }
+
+        // Join Group Dialog
+        if (showJoinDialog) {
+            AlertDialog(
+                onDismissRequest = { showJoinDialog = false },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val groupId = joinGroupId.text.trim()
+                        if (groupId.isNotEmpty()) {
+                            groupViewModel.sendJoinRequest(groupId)
+                            joinGroupId = TextFieldValue("")
+                            showJoinDialog = false
+                        }
+                    }) {
+                        Text("Send Request")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showJoinDialog = false }) {
+                        Text("Cancel")
+                    }
+                },
+                title = { Text("Join Group") },
+                text = {
+                    OutlinedTextField(
+                        value = joinGroupId,
+                        onValueChange = { joinGroupId = it },
+                        label = { Text("Group ID") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                },
+                shape = RoundedCornerShape(16.dp)
+            )
+        }
+
+        // View Invites Dialog
+        if (showInvitesDialog) {
+            AlertDialog(
+                onDismissRequest = { showInvitesDialog = false },
+                confirmButton = {
+                    TextButton(onClick = { showInvitesDialog = false }) {
+                        Text("Close")
+                    }
+                },
+                title = { Text("Group Invites") },
+                text = {
+                    if (groupInvites.isEmpty()) {
+                        Text("No group invites.")
+                    } else {
+                        Column {
+                            groupInvites.forEach { invite ->
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp),
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Text(invite.name, fontSize = 16.sp)
+                                        if (invite.description.isNotBlank()) {
+                                            Text(invite.description, fontSize = 14.sp, color = Color.Gray)
+                                        }
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            modifier = Modifier.padding(top = 8.dp)
+                                        ) {
+                                            TextButton(onClick = {
+                                                groupViewModel.acceptGroupInvite(invite.groupId)
+                                            }) {
+                                                Text("✔️ Accept")
+                                            }
+                                            TextButton(onClick = {
+                                                groupViewModel.declineGroupInvite(invite.groupId)
+                                            }) {
+                                                Text("❌ Decline")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
                 shape = RoundedCornerShape(16.dp)
             )
         }

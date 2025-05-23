@@ -9,6 +9,7 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.auth.User
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.util.UUID
@@ -20,14 +21,17 @@ data class Group(
     val admin: String = ""
 )
 
+data class GroupMember(
+    val uid: String = "",
+    val username: String = ""
+)
+
 private val firestore = FirebaseFirestore.getInstance()
 private val auth = FirebaseAuth.getInstance()
-
 private val _userGroups = mutableStateListOf<GroupData>()
-
 private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
-
 private val _senderUsernames = mutableStateMapOf<String, String>()
+private val _groupInvites = mutableStateListOf<GroupData>()
 
 class GroupViewModel : ViewModel() {
     private val db = FirebaseFirestore.getInstance()
@@ -38,7 +42,7 @@ class GroupViewModel : ViewModel() {
     val userGroups: List<GroupData> = _userGroups
     val messages: StateFlow<List<ChatMessage>> = _messages
     val senderUsernames: Map<String, String> = _senderUsernames
-
+    val groupInvites: List<GroupData> get() = _groupInvites
 
     fun createGroup(name: String, description: String) {
         val groupId = UUID.randomUUID().toString()
@@ -188,4 +192,186 @@ class GroupViewModel : ViewModel() {
                 _senderUsernames[senderId] = username
             }
     }
+
+    fun sendJoinRequest(groupId: String) {
+        val userId = auth.currentUser?.uid ?: return
+
+        // Optional: check if already in blocked list
+        val groupRef = firestore.collection("Groups").document(groupId)
+        groupRef.get().addOnSuccessListener { doc ->
+            val blocked = doc.get("blocked") as? List<String> ?: emptyList()
+            if (blocked.contains(userId)) {
+                Log.d("GroupViewModel", "User is blocked from this group")
+                return@addOnSuccessListener
+            }
+
+            groupRef.update("requests", FieldValue.arrayUnion(userId))
+                .addOnSuccessListener {
+                    Log.d("GroupViewModel", "Join request sent")
+                }
+        }
+    }
+
+    fun approveRequest(groupId: String, userId: String) {
+        val groupRef = firestore.collection("Groups").document(groupId)
+
+        groupRef.update(
+            mapOf(
+                "requests" to FieldValue.arrayRemove(userId),
+                "members" to FieldValue.arrayUnion(userId)
+            )
+        ).addOnSuccessListener {
+            firestore.collection("users").document(userId)
+                .update("groups", FieldValue.arrayUnion(groupId))
+        }
+    }
+
+    fun removeUserFromGroup(groupId: String, userId: String) {
+        val groupRef = firestore.collection("Groups").document(groupId)
+
+        groupRef.update("members", FieldValue.arrayRemove(userId))
+            .addOnSuccessListener {
+                firestore.collection("users").document(userId)
+                    .update("groups", FieldValue.arrayRemove(groupId))
+            }
+    }
+
+    fun blockUser(groupId: String, userId: String) {
+        removeUserFromGroup(groupId, userId)
+        firestore.collection("Groups").document(groupId)
+            .update("blocked", FieldValue.arrayUnion(userId))
+    }
+
+    fun unblockUser(groupId: String, userId: String) {
+        firestore.collection("Groups").document(groupId)
+            .update("blocked", FieldValue.arrayRemove(userId))
+    }
+
+    fun getPendingRequests(groupId: String, callback: (List<String>) -> Unit) {
+        firestore.collection("Groups").document(groupId)
+            .get()
+            .addOnSuccessListener { document ->
+                val requests = document.get("requests") as? List<String> ?: emptyList()
+                callback(requests)
+            }
+    }
+
+    fun loadGroupInvites(userId: String) {
+        val userDocRef = firestore.collection("users").document(userId)
+
+        userDocRef.get().addOnSuccessListener { userDoc ->
+            val inviteGroupIds = userDoc.get("groupInvites") as? List<String> ?: emptyList()
+
+            _groupInvites.clear()
+            if (inviteGroupIds.isEmpty()) return@addOnSuccessListener
+
+            val invites = mutableListOf<GroupData>()
+            for (groupId in inviteGroupIds) {
+                firestore.collection("Groups").document(groupId).get()
+                    .addOnSuccessListener { groupDoc ->
+                        val name = groupDoc.getString("groupName") ?: "Unnamed"
+                        val description = groupDoc.getString("groupDescription") ?: ""
+                        val lastMsg = groupDoc.getString("mostRecentMessageContent") ?: ""
+                        val timestamp = groupDoc.getLong("mostRecentMessageTimestamp") ?: 0L
+
+                        invites.add(
+                            GroupData(
+                                groupId = groupId,
+                                name = name,
+                                description = description,
+                                mostRecentMessage = lastMsg,
+                                mostRecentTimestamp = timestamp
+                            )
+                        )
+
+                        if (invites.size == inviteGroupIds.size) {
+                            _groupInvites.addAll(invites.sortedByDescending { it.mostRecentTimestamp })
+                        }
+                    }
+            }
+        }
+    }
+
+    fun acceptGroupInvite(groupId: String) {
+        val userId = auth.currentUser?.uid ?: return
+
+        // Add groupId to user's group list
+        firestore.collection("users").document(userId)
+            .update("groups", FieldValue.arrayUnion(groupId,))
+
+        // Remove invite from user's document
+        firestore.collection("users").document(userId)
+            .update("groupInvites", FieldValue.arrayRemove(groupId))
+
+        // Add user to group members
+        firestore.collection("Groups").document(groupId)
+            .update("members", FieldValue.arrayUnion(userId))
+
+        // Refresh invites list and user groups
+        loadGroupInvites(userId)
+        loadUserGroups(userId)
+    }
+
+    fun declineGroupInvite(groupId: String) {
+        val userId = auth.currentUser?.uid ?: return
+
+        firestore.collection("users").document(userId)
+            .update("groupInvites", FieldValue.arrayRemove(groupId))
+            .addOnSuccessListener {
+                loadGroupInvites(userId)
+            }
+    }
+
+    fun fetchGroupMembers(groupId: String, onResult: (List<GroupMember>) -> Unit) {
+        firestore.collection("Groups")
+            .document(groupId)
+            .get()
+            .addOnSuccessListener { groupDoc ->
+                val memberIds = groupDoc.get("members") as? List<String> ?: emptyList()
+                val members = mutableListOf<GroupMember>()
+                if (memberIds.isEmpty()) {
+                    onResult(emptyList())
+                    return@addOnSuccessListener
+                }
+
+                memberIds.forEach { uid ->
+                    firestore.collection("users").document(uid).get()
+                        .addOnSuccessListener { userDoc ->
+                            val username = userDoc.getString("username") ?: "Unknown"
+                            members.add(GroupMember(uid = uid, username = username))
+
+                            if (members.size == memberIds.size) {
+                                onResult(members)
+                            }
+                        }
+                }
+            }
+    }
+
+    fun toggleAdminStatus(groupId: String, memberId: String) {
+        val groupRef = FirebaseFirestore.getInstance().collection("Groups").document(groupId)
+        FirebaseFirestore.getInstance().runTransaction { transaction ->
+            val snapshot = transaction.get(groupRef)
+            val admins = snapshot.get("administrators") as? MutableList<String> ?: mutableListOf()
+            if (admins.contains(memberId)) {
+                admins.remove(memberId)
+            } else {
+                admins.add(memberId)
+            }
+            transaction.update(groupRef, "administrators", admins)
+        }
+    }
+
+    fun removeMember(groupId: String, memberId: String) {
+        val groupRef = FirebaseFirestore.getInstance().collection("Groups").document(groupId)
+        groupRef.collection("members").document(memberId).delete()
+        // Optional: Remove from administrators list
+        groupRef.update("administrators", FieldValue.arrayRemove(memberId))
+    }
+
+    fun deleteGroup(groupId: String) {
+        val groupRef = FirebaseFirestore.getInstance().collection("Groups").document(groupId)
+        groupRef.delete()
+    }
+
 }

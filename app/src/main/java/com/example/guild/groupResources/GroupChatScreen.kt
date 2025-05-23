@@ -1,23 +1,28 @@
 package com.example.guild.groupResources
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.guild.chatResources.ChatMessage
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.tasks.await
 import java.text.SimpleDateFormat
@@ -34,13 +39,33 @@ fun GroupChatScreen(
     val usernames = groupViewModel.senderUsernames
     val listState = rememberLazyListState()
     var messageText by remember { mutableStateOf("") }
-    var showDialog by remember { mutableStateOf(false) }
 
+    var showInfoDialog by remember { mutableStateOf(false) }
+    var showMenu by remember { mutableStateOf(false) }
+    var showAdminPanelDialog by remember { mutableStateOf(false) }
+
+    val currentUserId = FirebaseAuth.getInstance().currentUser?.uid.orEmpty()
+    var isAdmin by remember { mutableStateOf(false) }
+    var groupMembers by remember { mutableStateOf<List<GroupMember>>(emptyList()) }
+
+    val context = LocalContext.current
+
+    // Load group data
     LaunchedEffect(groupId) {
         groupViewModel.listenForGroupMessages(groupId)
+
+        FirebaseFirestore.getInstance().collection("Groups").document(groupId).get()
+            .addOnSuccessListener { doc ->
+                val owner = doc.getString("owner")
+                val admins = doc.get("administrators") as? List<String> ?: emptyList()
+                isAdmin = currentUserId == owner || admins.contains(currentUserId)
+            }
+
+        groupViewModel.fetchGroupMembers(groupId) { members ->
+            groupMembers = members
+        }
     }
 
-    // Scroll to bottom when new message arrives
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
             listState.animateScrollToItem(messages.lastIndex)
@@ -56,13 +81,44 @@ fun GroupChatScreen(
             title = {
                 Text(
                     text = groupName,
-                    modifier = Modifier.clickable { showDialog = true },
+                    modifier = Modifier.clickable { showInfoDialog = true },
                     color = MaterialTheme.colorScheme.onBackground
                 )
             },
             actions = {
-                IconButton(onClick = { /* TODO: kebab menu */ }) {
-                    Icon(Icons.Default.MoreVert, contentDescription = "Menu")
+                Box {
+                    IconButton(onClick = { showMenu = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "Menu")
+                    }
+
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false }
+                    ) {
+                        if (isAdmin) {
+                            DropdownMenuItem(
+                                text = { Text("Admin Panel") },
+                                onClick = {
+                                    showAdminPanelDialog = true
+                                    showMenu = false
+                                }
+                            )
+                        }
+                        DropdownMenuItem(
+                            text = { Text("Group Info") },
+                            onClick = {
+                                showInfoDialog = true
+                                showMenu = false
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Leave Group") },
+                            onClick = {
+                                groupViewModel.leaveGroup(groupId)
+                                showMenu = false
+                            }
+                        )
+                    }
                 }
             }
         )
@@ -86,24 +142,22 @@ fun GroupChatScreen(
             }
         }
 
-        // Message Input
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(
-                onClick = { /* TODO: attachments */ },
-                modifier = Modifier.size(48.dp)
-            ) {
+            IconButton(onClick = { /* attachments */ }) {
                 Text("+", fontSize = 24.sp)
             }
 
             OutlinedTextField(
                 value = messageText,
                 onValueChange = { messageText = it },
-                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 8.dp),
                 placeholder = { Text("Message...") }
             )
 
@@ -118,18 +172,85 @@ fun GroupChatScreen(
         }
     }
 
-    // Group Info Dialog
-    if (showDialog) {
-        GroupInfoDialog(groupId = groupId, onDismiss = { showDialog = false })
+    if (showInfoDialog) {
+        GroupInfoDialog(
+            groupId = groupId,
+            onDismiss = { showInfoDialog = false },
+            groupViewModel = groupViewModel
+        )
     }
+
+    if (isAdmin && showAdminPanelDialog) {
+        AdminPanelDialog(
+            groupId = groupId,
+            groupMembers = groupMembers,
+            onDismiss = { showAdminPanelDialog = false },
+            groupViewModel = groupViewModel
+        )
+    }
+}
+
+@Composable
+fun AdminPanelDialog(
+    groupId: String,
+    groupMembers: List<GroupMember>,
+    onDismiss: () -> Unit,
+    groupViewModel: GroupViewModel
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {},
+        title = { Text("Admin Panel") },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text("Members:", fontWeight = FontWeight.SemiBold)
+                LazyColumn(modifier = Modifier.fillMaxHeight(0.6f)) {
+                    items(groupMembers) { member ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                        ) {
+                            Text(member.username, modifier = Modifier.weight(1f))
+                            IconButton(onClick = {
+                                groupViewModel.toggleAdminStatus(groupId, member.uid)
+                            }) {
+                                Icon(Icons.Default.Star, contentDescription = "Toggle Admin")
+                            }
+                            IconButton(onClick = {
+                                groupViewModel.removeMember(groupId, member.uid)
+                            }) {
+                                Icon(Icons.Default.Delete, contentDescription = "Remove")
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Button(
+                    onClick = {
+                        groupViewModel.deleteGroup(groupId)
+                        onDismiss()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
+                ) {
+                    Text("Delete Group", color = Color.White)
+                }
+            }
+        },
+        modifier = Modifier.fillMaxHeight()
+    )
 }
 
 @Composable
 fun GroupInfoDialog(
     groupId: String,
     onDismiss: () -> Unit,
-    groupViewModel: GroupViewModel = GroupViewModel()
+    groupViewModel: GroupViewModel
 ) {
+    val clipboardManager = LocalClipboardManager.current
     var groupName by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
     var members by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -153,12 +274,25 @@ fun GroupInfoDialog(
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(groupName, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 Text(description, fontSize = 14.sp, color = Color.Gray, modifier = Modifier.padding(bottom = 12.dp))
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Group ID: $groupId", fontSize = 12.sp, color = Color.Gray)
+                    IconButton(
+                        onClick = {
+                            clipboardManager.setText(AnnotatedString(groupId))
+                        },
+                        modifier = Modifier.size(18.dp)
+                    ) {
+                        Icon(Icons.Default.AddCircle, contentDescription = "Copy", modifier = Modifier.size(14.dp))
+                    }
+                }
+
                 Divider()
                 Text("Members:", fontWeight = FontWeight.SemiBold)
                 LazyColumn(modifier = Modifier.fillMaxHeight(0.5f)) {
                     items(members) { uid ->
                         val color = when (uid) {
-                            ownerId -> Color(0xFFBB86FC) // purple
+                            ownerId -> Color(0xFFBB86FC)
                             in admins -> Color.Red
                             else -> Color.Blue
                         }
