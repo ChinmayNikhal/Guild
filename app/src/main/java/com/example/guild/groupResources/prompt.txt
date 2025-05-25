@@ -1,0 +1,11 @@
+lets fix these problems in GroupManageScreen:
+-> val userGroups by remember { derivedStateOf { groupsViewModel.userGroups } } gives :
+    Cannot infer type for this parameter. Please specify it explicitly.
+    Not enough information to infer type argument for 'T'.
+    Unresolved reference 'userGroups'.
+->  Unresolved reference 'Button'. Unresolved reference 'ButtonDefaults'. Unresolved reference 'Icon'. Unresolved reference 'h6'. Unresolved reference 'OutlinedTextField'. Unresolved reference 'it'. Unresolved reference 'Button'. Unresolved reference 'Card'. Unresolved reference 'body2'. Unresolved reference 'caption'. Unresolved reference 'Surface'.
+->  @Composable invocations can only happen from the context of a @Composable function line 43, 44, 67, 75,
+->  Argument type mismatch: actual type is 'kotlin.Int', but 'com.example.guild.groupResources.GroupData' was expected. line 53
+
+
+The leave group isnt leaving the group. When I'm on the GroupChatScreen and when I click the GroupManage button in the sidebar, it dont do anything :p

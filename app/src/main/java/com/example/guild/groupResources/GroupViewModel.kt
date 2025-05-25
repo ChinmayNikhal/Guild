@@ -1,5 +1,6 @@
 package com.example.guild.groupResources
 
+import android.annotation.SuppressLint
 import android.util.Log
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -8,6 +9,7 @@ import com.example.guild.chatResources.ChatMessage
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestore.getInstance
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.auth.User
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,7 +28,7 @@ data class GroupMember(
     val username: String = ""
 )
 
-private val firestore = FirebaseFirestore.getInstance()
+private val firestore = getInstance()
 private val auth = FirebaseAuth.getInstance()
 private val _userGroups = mutableStateListOf<GroupData>()
 private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
@@ -34,7 +36,7 @@ private val _senderUsernames = mutableStateMapOf<String, String>()
 private val _groupInvites = mutableStateListOf<GroupData>()
 
 class GroupViewModel : ViewModel() {
-    private val db = FirebaseFirestore.getInstance()
+    private val db = getInstance()
     private val auth = FirebaseAuth.getInstance()
     private val _groups = MutableStateFlow<List<Group>>(emptyList())
     val groups: StateFlow<List<Group>> = _groups
@@ -76,7 +78,7 @@ class GroupViewModel : ViewModel() {
     }
 
     fun loadUserGroups(userId: String) {
-        FirebaseFirestore.getInstance()
+        getInstance()
             .collection("users")
             .document(userId)
             .get()
@@ -85,7 +87,7 @@ class GroupViewModel : ViewModel() {
                 _userGroups.clear()
                 val groupDataList = mutableListOf<GroupData>()
                 for (groupId in groupIds) {
-                    FirebaseFirestore.getInstance()
+                    getInstance()
                         .collection("Groups")
                         .document(groupId)
                         .get()
@@ -355,8 +357,8 @@ class GroupViewModel : ViewModel() {
     }
 
     fun toggleAdminStatus(groupId: String, memberId: String) {
-        val groupRef = FirebaseFirestore.getInstance().collection("Groups").document(groupId)
-        FirebaseFirestore.getInstance().runTransaction { transaction ->
+        val groupRef = getInstance().collection("Groups").document(groupId)
+        getInstance().runTransaction { transaction ->
             val snapshot = transaction.get(groupRef)
             val admins = snapshot.get("administrators") as? MutableList<String> ?: mutableListOf()
             if (admins.contains(memberId)) {
@@ -369,14 +371,14 @@ class GroupViewModel : ViewModel() {
     }
 
     fun removeMember(groupId: String, memberId: String) {
-        val groupRef = FirebaseFirestore.getInstance().collection("Groups").document(groupId)
+        val groupRef = getInstance().collection("Groups").document(groupId)
         groupRef.collection("members").document(memberId).delete()
         // Optional: Remove from administrators list
         groupRef.update("administrators", FieldValue.arrayRemove(memberId))
     }
 
     fun deleteGroup(groupId: String) {
-        val groupRef = FirebaseFirestore.getInstance().collection("Groups").document(groupId)
+        val groupRef = getInstance().collection("Groups").document(groupId)
         groupRef.delete()
     }
 

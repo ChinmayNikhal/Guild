@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.guild.chatResources.ChatMessage
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.tasks.await
 import java.text.SimpleDateFormat
@@ -197,6 +198,10 @@ fun AdminPanelDialog(
     onDismiss: () -> Unit,
     groupViewModel: GroupViewModel
 ) {
+    var showInviteDialog by remember { mutableStateOf(false) }
+    var showRequestsDialog by remember { mutableStateOf(false) }
+    var showBlockedDialog by remember { mutableStateOf(false) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {},
@@ -204,7 +209,7 @@ fun AdminPanelDialog(
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text("Members:", fontWeight = FontWeight.SemiBold)
-                LazyColumn(modifier = Modifier.fillMaxHeight(0.6f)) {
+                LazyColumn(modifier = Modifier.fillMaxHeight(0.4f)) {
                     items(groupMembers) { member ->
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -229,6 +234,20 @@ fun AdminPanelDialog(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
+                Button(onClick = { showInviteDialog = true }) {
+                    Text("Send Group Invite")
+                }
+
+                Button(onClick = { showRequestsDialog = true }) {
+                    Text("Review Join Requests")
+                }
+
+                Button(onClick = { showBlockedDialog = true }) {
+                    Text("View Blocked Users")
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
                 Button(
                     onClick = {
                         groupViewModel.deleteGroup(groupId)
@@ -241,7 +260,20 @@ fun AdminPanelDialog(
             }
         }
     )
+
+    if (showInviteDialog) {
+        InviteUserDialog(groupId, onDismiss = { showInviteDialog = false }, groupViewModel)
+    }
+
+    if (showRequestsDialog) {
+        JoinRequestsDialog(groupId, onDismiss = { showRequestsDialog = false }, groupViewModel)
+    }
+
+    if (showBlockedDialog) {
+        BlockedUsersDialog(groupId, onDismiss = { showBlockedDialog = false }, groupViewModel)
+    }
 }
+
 
 @Composable
 fun GroupInfoDialog(
@@ -297,6 +329,135 @@ fun GroupInfoDialog(
                         }
                         val name = groupViewModel.senderUsernames[uid] ?: uid
                         Text(name, color = color)
+                    }
+                }
+            }
+        }
+    )
+}
+
+@Composable
+fun InviteUserDialog(groupId: String, onDismiss: () -> Unit, groupViewModel: GroupViewModel) {
+    var username by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            Button(onClick = {
+                FirebaseFirestore.getInstance().collection("users")
+                    .whereEqualTo("username", username)
+                    .get()
+                    .addOnSuccessListener { snapshot ->
+                        snapshot.documents.firstOrNull()?.id?.let { uid ->
+                            groupViewModel.sendGroupInvite(groupId, uid)
+                        }
+                    }
+                onDismiss()
+            }) {
+                Text("Send Invite")
+            }
+        },
+        title = { Text("Send Group Invite") },
+        text = {
+            Column {
+                Text("Enter username to invite:")
+                Spacer(Modifier.height(8.dp))
+                TextField(value = username, onValueChange = { username = it })
+            }
+        }
+    )
+}
+
+@Composable
+fun JoinRequestsDialog(groupId: String, onDismiss: () -> Unit, groupViewModel: GroupViewModel) {
+    var requests by remember { mutableStateOf<List<String>>(emptyList()) }
+    val usernames = remember { mutableStateMapOf<String, String>() }
+
+    LaunchedEffect(true) {
+        groupViewModel.getPendingRequests(groupId) { reqs ->
+            requests = reqs
+            reqs.forEach { uid ->
+                FirebaseFirestore.getInstance().collection("users").document(uid).get()
+                    .addOnSuccessListener {
+                        val name = it.getString("username") ?: "Unknown"
+                        usernames[uid] = name
+                    }
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {},
+        title = { Text("Join Requests") },
+        text = {
+            Column {
+                if (requests.isEmpty()) {
+                    Text("No pending requests.")
+                } else {
+                    requests.forEach { uid ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(usernames[uid] ?: uid)
+                            Row {
+                                IconButton(onClick = {
+                                    groupViewModel.approveRequest(groupId, uid)
+                                    onDismiss()
+                                }) {
+                                    Icon(Icons.Default.Check, contentDescription = "Approve")
+                                }
+                                IconButton(onClick = {
+                                    FirebaseFirestore.getInstance().collection("Groups")
+                                        .document(groupId)
+                                        .update("requests", FieldValue.arrayRemove(uid))
+                                    onDismiss()
+                                }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Decline")
+                                }
+                            }
+                        }
+                    }
+
+                }
+            }
+        }
+    )
+}
+
+@Composable
+fun BlockedUsersDialog(groupId: String, onDismiss: () -> Unit, groupViewModel: GroupViewModel) {
+    var blocked by remember { mutableStateOf<List<GroupMember>>(emptyList()) }
+
+    LaunchedEffect(true) {
+        groupViewModel.getBlockedUsers(groupId) {
+            blocked = it
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {},
+        title = { Text("Blocked Users") },
+        text = {
+            Column {
+                if (blocked.isEmpty()) {
+                    Text("No blocked users.")
+                } else {
+                    blocked.forEach { member ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(member.username)
+                            IconButton(onClick = {
+                                groupViewModel.unblockUser(groupId, member.uid)
+                                onDismiss()
+                            }) {
+                                Icon(Icons.Default.Refresh, contentDescription = "Unblock")
+                            }
+                        }
                     }
                 }
             }
