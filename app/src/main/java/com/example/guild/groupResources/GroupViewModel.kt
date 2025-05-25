@@ -44,6 +44,9 @@ class GroupViewModel : ViewModel() {
     val senderUsernames: Map<String, String> = _senderUsernames
     val groupInvites: List<GroupData> get() = _groupInvites
 
+    private val _groupPreviews = MutableStateFlow<List<GroupData>>(emptyList())
+    val groupPreviews: StateFlow<List<GroupData>> get() = _groupPreviews
+
     fun createGroup(name: String, description: String) {
         val groupId = UUID.randomUUID().toString()
         val currentUser = com.example.guild.groupResources.auth.currentUser ?: return
@@ -102,7 +105,10 @@ class GroupViewModel : ViewModel() {
                             )
                             // After fetching all group data, sort and update the list
                             if (groupDataList.size == groupIds.size) {
-                                _userGroups.addAll(groupDataList.sortedByDescending { it.mostRecentTimestamp })
+                                val sortedGroups = groupDataList.sortedByDescending { it.mostRecentTimestamp }
+                                _userGroups.addAll(sortedGroups)
+                                _groupPreviews.value = sortedGroups
+
                             }
                         }
                 }
@@ -373,5 +379,74 @@ class GroupViewModel : ViewModel() {
         val groupRef = FirebaseFirestore.getInstance().collection("Groups").document(groupId)
         groupRef.delete()
     }
+
+    fun isUserAdmin(groupId: String, callback: (Boolean) -> Unit) {
+        val userId = auth.currentUser?.uid ?: return callback(false)
+        firestore.collection("Groups").document(groupId).get()
+            .addOnSuccessListener { doc ->
+                val admins = doc.get("administrators") as? List<String> ?: emptyList()
+                callback(admins.contains(userId))
+            }
+    }
+
+    fun sendGroupInvite(groupId: String, userId: String) {
+        val groupRef = firestore.collection("Groups").document(groupId)
+        val userRef = firestore.collection("users").document(userId)
+
+        userRef.update("groupInvites", FieldValue.arrayUnion(groupId))
+            .addOnSuccessListener {
+                Log.d("GroupViewModel", "Invite sent to user: $userId")
+            }
+    }
+
+    fun fetchGroupInfo(groupId: String, callback: (name: String, description: String, members: List<GroupMember>) -> Unit) {
+        firestore.collection("Groups").document(groupId).get()
+            .addOnSuccessListener { groupDoc ->
+                val name = groupDoc.getString("groupName") ?: "Unnamed"
+                val description = groupDoc.getString("groupDescription") ?: ""
+                val memberIds = groupDoc.get("members") as? List<String> ?: emptyList()
+                val members = mutableListOf<GroupMember>()
+
+                if (memberIds.isEmpty()) {
+                    callback(name, description, emptyList())
+                    return@addOnSuccessListener
+                }
+
+                memberIds.forEach { uid ->
+                    firestore.collection("users").document(uid).get()
+                        .addOnSuccessListener { userDoc ->
+                            val username = userDoc.getString("username") ?: "Unknown"
+                            members.add(GroupMember(uid = uid, username = username))
+                            if (members.size == memberIds.size) {
+                                callback(name, description, members)
+                            }
+                        }
+                }
+            }
+    }
+
+    fun getBlockedUsers(groupId: String, callback: (List<GroupMember>) -> Unit) {
+        firestore.collection("Groups").document(groupId).get()
+            .addOnSuccessListener { groupDoc ->
+                val blockedIds = groupDoc.get("blocked") as? List<String> ?: emptyList()
+                if (blockedIds.isEmpty()) {
+                    callback(emptyList())
+                    return@addOnSuccessListener
+                }
+
+                val blockedMembers = mutableListOf<GroupMember>()
+                blockedIds.forEach { uid ->
+                    firestore.collection("users").document(uid).get()
+                        .addOnSuccessListener { userDoc ->
+                            val username = userDoc.getString("username") ?: "Unknown"
+                            blockedMembers.add(GroupMember(uid = uid, username = username))
+                            if (blockedMembers.size == blockedIds.size) {
+                                callback(blockedMembers)
+                            }
+                        }
+                }
+            }
+    }
+
 
 }

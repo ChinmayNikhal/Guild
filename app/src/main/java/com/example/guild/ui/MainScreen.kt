@@ -28,10 +28,13 @@ import com.example.guild.R
 import com.example.guild.chatResources.ChatMessage
 import com.example.guild.chatResources.ChatViewModel
 import com.example.guild.chatResources.ChatScreen
+import com.example.guild.groupResources.GroupChatScreen
 import com.example.guild.groupResources.GroupViewModel
 import com.example.guild.ui.GroupManageScreen
 import com.example.guild.ui.MainScreenState.*
 import com.example.guild.ui.theme.GuildTheme
+import androidx.compose.runtime.getValue
+import com.google.firebase.auth.FirebaseAuth
 
 
 sealed class MainScreenState {
@@ -65,10 +68,10 @@ fun MainScreen(
                 is Profile -> "Profile"
                 is Friends -> "Friends"
                 is MainScreenState.Settings -> "Settings"
-                is Groups -> TODO()
+                is Groups -> "Groups"
                 is Chat -> "Chat"
                 is GroupManage-> "GroupManage"
-                is GroupChat -> TODO()
+                is GroupChat -> "GroupChat"
             },
             onScreenSelected = { screen ->
                 selectedScreen = when (screen) {
@@ -77,6 +80,7 @@ fun MainScreen(
                     "Settings" -> MainScreenState.Settings
                     "Profile" -> Profile
                     "GroupManage" -> GroupManage
+                    "Groups" -> Groups
 
                     else -> DM
                 }
@@ -102,8 +106,18 @@ fun MainScreen(
             Friends -> FriendsScreen(authViewModel = viewModel())
             GroupManage -> GroupManageScreen(groupViewModel = groupViewModel)
             MainScreenState.Settings -> SettingsScreen(onLogout = onLogout)
-            Groups -> TODO()
-            is GroupChat -> TODO()
+            Groups -> GroupsScreen(
+                onGroupSelected = { groupId, groupName ->
+                    groupViewModel.listenForGroupMessages(groupId)
+                    selectedScreen = GroupChat(groupId, groupName)
+                },
+                groupViewModel = groupViewModel
+            )
+            is GroupChat -> GroupChatScreen(
+                groupId = screen.groupId,
+                groupName = screen.groupName,
+                groupViewModel = groupViewModel
+            )
         }
     }
 }
@@ -305,5 +319,61 @@ fun Sidebar(selectedScreen: String, onScreenSelected: (String) -> Unit) {
         }
 
         Spacer(modifier = Modifier.height(10.dp))
+    }
+}
+
+@Composable
+fun GroupsScreen(
+    onGroupSelected: (groupId: String, groupName: String) -> Unit,
+    groupViewModel: GroupViewModel = viewModel()
+) {
+    val currentUser = FirebaseAuth.getInstance().currentUser
+    val userId = currentUser?.uid
+
+    val groupList by groupViewModel.groupPreviews.collectAsState(initial = emptyList())
+
+    LaunchedEffect(Unit) {
+        groupViewModel.loadUserGroups(userId.toString())
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .padding(16.dp)
+    ) {
+        Text("Groups", color = Color.White, fontSize = 24.sp)
+        Spacer(modifier = Modifier.height(16.dp))
+
+        if (groupList.isEmpty()) {
+            Text(text = "Loading Groups...", color = Color.Gray)
+        }
+
+        groupList.sortedByDescending { it.mostRecentTimestamp }.forEach { group ->
+        Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp)
+                    .clickable {
+                        onGroupSelected(group.groupId, group.name)
+                    },
+                colors = CardDefaults.cardColors(containerColor = Color.Black),
+                shape = MaterialTheme.shapes.medium,
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text(
+                        text = group.name,
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        text = group.mostRecentMessage,
+                        color = Color.LightGray,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
     }
 }

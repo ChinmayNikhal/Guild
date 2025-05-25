@@ -239,8 +239,7 @@ fun AdminPanelDialog(
                     Text("Delete Group", color = Color.White)
                 }
             }
-        },
-        modifier = Modifier.fillMaxHeight()
+        }
     )
 }
 
@@ -301,7 +300,6 @@ fun GroupInfoDialog(
                     }
                 }
             }
-        },
-        modifier = Modifier.fillMaxHeight()
+        }
     )
 }
