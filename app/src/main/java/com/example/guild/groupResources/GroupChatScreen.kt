@@ -28,6 +28,9 @@ import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.tasks.await
 import java.text.SimpleDateFormat
 import java.util.*
+import androidx.lifecycle.viewmodel.compose.viewModel
+
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -37,6 +40,7 @@ fun GroupChatScreen(
     groupViewModel: GroupViewModel,
     onLeaveGroup: () -> Unit
 ) {
+    val viewModel: GroupViewModel = viewModel()
     val messages by groupViewModel.messages.collectAsState()
     val usernames = groupViewModel.senderUsernames
     val listState = rememberLazyListState()
@@ -45,6 +49,8 @@ fun GroupChatScreen(
     var showInfoDialog by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
     var showAdminPanelDialog by remember { mutableStateOf(false) }
+    var disappearingEnabled by remember { mutableStateOf(false) }
+
 
     val currentUserId = FirebaseAuth.getInstance().currentUser?.uid.orEmpty()
     var isAdmin by remember { mutableStateOf(false) }
@@ -114,6 +120,18 @@ fun GroupChatScreen(
                             }
                         )
                         DropdownMenuItem(
+                            text = {
+                                Text(if (disappearingEnabled) "Disable Disappearing Msgs" else "Enable Disappearing Msgs")
+                            },
+                            onClick = {
+                                disappearingEnabled = !disappearingEnabled // Toggle the value
+                                showMenu = false
+                            }
+                        )
+
+
+
+                        DropdownMenuItem(
                             text = { Text("Leave Group") },
                             onClick = {
                                 groupViewModel.leaveGroup(groupId)
@@ -134,15 +152,30 @@ fun GroupChatScreen(
         ) {
             items(messages) { msg ->
                 val sender = usernames[msg.senderId] ?: msg.senderId
-                Column(modifier = Modifier.padding(vertical = 4.dp)) {
-                    Text(sender, fontSize = 12.sp, color = Color.Gray)
-                    Text(msg.text, fontSize = 16.sp, color = MaterialTheme.colorScheme.onBackground)
-                    Text(
-                        SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date(msg.timestamp)),
-                        fontSize = 10.sp, color = Color.Gray
-                    )
+
+                // 🔁 Mark message as seen when this message is composed
+                LaunchedEffect(msg.messageId) {
+                    viewModel.markGroupMessageAsSeen(groupId, msg.messageId)
                 }
+
+                val shouldHide = msg.disappearing &&
+                        msg.seenBy?.get(currentUserId)?.let { seenTimestamp ->
+                            System.currentTimeMillis() - seenTimestamp > 1 * 60 * 1000
+                        } == true
+
+                if (!shouldHide) {
+                    Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                        Text(sender, fontSize = 12.sp, color = Color.Gray)
+                        Text(msg.text, fontSize = 16.sp, color = MaterialTheme.colorScheme.onBackground)
+                        Text(
+                            SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date(msg.timestamp)),
+                            fontSize = 10.sp, color = Color.Gray
+                        )
+                    }
+                }
+
             }
+
         }
 
         Row(
@@ -166,8 +199,13 @@ fun GroupChatScreen(
 
             IconButton(onClick = {
                 if (messageText.isNotBlank()) {
-                    groupViewModel.sendGroupMessage(groupId, messageText.trim())
-                    messageText = ""
+                    // Pass the disappearing flag correctly
+                    groupViewModel.sendGroupMessage(
+                        groupId = groupId,
+                        text = messageText.trim(),
+                        disappearing = disappearingEnabled // Pass the boolean value
+                    )
+                    messageText = "" // Clear the input field after sending the message
                 }
             }) {
                 Text("➤", fontSize = 18.sp)

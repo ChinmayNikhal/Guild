@@ -134,10 +134,11 @@ class GroupViewModel : ViewModel() {
     }
 
 
-    fun sendGroupMessage(groupId: String, text: String, ttl: Long = 0L) {
+    fun sendGroupMessage(groupId: String, text: String, disappearing: Boolean = false) {
         val senderId = auth.currentUser?.uid ?: return
         val messageId = UUID.randomUUID().toString()
         val timestamp = System.currentTimeMillis()
+        val ttl = if (disappearing) 5 * 60 * 1000 else 0L // 5 minutes if disappearing, else 0
 
         val groupRef = firestore.collection("Groups").document(groupId)
 
@@ -151,10 +152,9 @@ class GroupViewModel : ViewModel() {
                 val newKey = AESCipher.generateKey()
                 val newEncodedKey = Base64.encodeToString(newKey.encoded, Base64.DEFAULT)
 
-                // Update Firestore with the new key, then retry sending the message
+                // Save the key and retry sending the message
                 groupRef.update("aesKey", newEncodedKey).addOnSuccessListener {
-                    // Retry sending message after key is saved
-                    sendGroupMessage(groupId, text, ttl)
+                    sendGroupMessage(groupId, text, disappearing)
                 }
                 return@addOnSuccessListener
             }
@@ -171,7 +171,8 @@ class GroupViewModel : ViewModel() {
                     "senderId" to senderId,
                     "text" to encryptedText,
                     "timestamp" to timestamp,
-                    "ttl" to ttl
+                    "ttl" to ttl,
+                    "disappearing" to disappearing
                 )
 
                 Log.d("GroupViewModel", "📤 Uploading message: $message")
@@ -200,7 +201,6 @@ class GroupViewModel : ViewModel() {
     }
 
 
-
     fun listenForGroupMessages(groupId: String, text: String? = null, ttl: Long = 0L) {
         val groupRef = firestore.collection("Groups").document(groupId)
 
@@ -217,12 +217,12 @@ class GroupViewModel : ViewModel() {
                     Log.d("GroupViewModel", "✅ Fallback AES key stored.")
                     if (!text.isNullOrEmpty()) {
                         Log.d("GroupViewModel", "📤 Retrying message sending.")
-                        sendGroupMessage(groupId, text, ttl)
+                        val disappearing = false
+                        sendGroupMessage(groupId, text, disappearing)
                     }
                 }
                 return@addOnSuccessListener
             }
-
 
             val keyBytes = Base64.decode(encodedKey, Base64.DEFAULT)
             val secretKey = SecretKeySpec(keyBytes, "AES")
@@ -240,43 +240,58 @@ class GroupViewModel : ViewModel() {
                         return@addSnapshotListener
                     }
 
-                    Log.d("GroupViewModel", "📥 Fetched ${snapshot.documents.size} messages")
-
                     val now = System.currentTimeMillis()
-                    val decryptedMessages = snapshot.documents.mapNotNull { doc ->
-                        val ttl = doc.getLong("ttl") ?: 0L
-                        val timestamp = doc.getLong("timestamp") ?: return@mapNotNull null
+                    val currentUserId = auth.currentUser?.uid ?: return@addSnapshotListener
 
-                        if (ttl == 0L || timestamp + ttl > now) {
-                            val encryptedText = doc.getString("text") ?: return@mapNotNull null
-                            return@mapNotNull try {
-                                val decryptedText = AESCipher.decrypt(encryptedText, secretKey)
-                                Log.d("GroupViewModel", "🟢 Decrypted: $decryptedText")
-                                ChatMessage(
-                                    messageId = doc.getString("messageId") ?: "",
-                                    senderId = doc.getString("senderId") ?: "",
-                                    text = decryptedText,
-                                    timestamp = timestamp,
-                                    ttl = ttl
-                                )
-                            } catch (e: Exception) {
-                                Log.e("GroupViewModel", "❌ Decryption failed: ${e.localizedMessage}", e)
-                                null
-                            }
-                        } else {
-                            Log.d("GroupViewModel", "🕓 Skipping expired message ${doc.id}")
+                    val decryptedMessages = snapshot.documents.mapNotNull { doc ->
+                        val messageId = doc.getString("messageId") ?: return@mapNotNull null
+                        val senderId = doc.getString("senderId") ?: return@mapNotNull null
+                        val timestamp = doc.getLong("timestamp") ?: return@mapNotNull null
+                        val ttl = doc.getLong("ttl") ?: 0L
+                        val seenMap = doc.get("seenAt") as? Map<String, Long> ?: emptyMap()
+                        val seenAt = seenMap[currentUserId] ?: 0L
+                        val disappearing = ttl > 0L
+
+                        // Check if message should disappear
+                        if (disappearing && seenAt > 0L && now >= seenAt + ttl) {
+                            firestore.collection("Groups")
+                                .document(groupId)
+                                .collection("Messages")
+                                .document(messageId)
+                                .delete()
+                            Log.d("GroupViewModel", "🗑 Deleted expired disappearing message: $messageId")
+                            return@mapNotNull null
+                        }
+
+                        val encryptedText = doc.getString("text") ?: return@mapNotNull null
+                        try {
+                            val decryptedText = AESCipher.decrypt(encryptedText, secretKey)
+                            ChatMessage(
+                                messageId = messageId,
+                                senderId = senderId,
+                                text = decryptedText,
+                                timestamp = timestamp,
+                                ttl = ttl,
+                                seenAt = seenAt,
+                                disappearing = disappearing
+                            )
+                        } catch (e: Exception) {
+                            Log.e("GroupViewModel", "❌ Decryption failed: ${e.localizedMessage}", e)
                             null
                         }
                     }
 
-                    Log.d("GroupViewModel", "✅ Decrypted ${decryptedMessages.size} messages")
                     _messages.value = decryptedMessages
                     decryptedMessages.map { it.senderId }.distinct().forEach { fetchUsernameFor(it) }
+
+                    Log.d("GroupViewModel", "✅ Decrypted ${decryptedMessages.size} messages")
                 }
+
         }.addOnFailureListener { e ->
             Log.e("GroupViewModel", "❌ Failed to load group info: ${e.localizedMessage}", e)
         }
     }
+
 
 
 
@@ -290,6 +305,16 @@ class GroupViewModel : ViewModel() {
                 val username = document.getString("username") ?: senderId
                 _senderUsernames[senderId] = username
             }
+    }
+
+    fun markGroupMessageAsSeen(groupId: String, messageId: String) {
+        val userId = auth.currentUser?.uid ?: return
+        val seenPath = "seenAt.$userId"
+        firestore.collection("Groups")
+            .document(groupId)
+            .collection("Messages")
+            .document(messageId)
+            .update(seenPath, System.currentTimeMillis())
     }
 
     fun sendJoinRequest(groupId: String) {
