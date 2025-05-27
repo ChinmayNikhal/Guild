@@ -42,6 +42,7 @@ fun GroupManageScreen(
     LaunchedEffect(userId) {
         userId?.let {
             groupViewModel.loadUserGroups(it)
+            groupViewModel.loadGroupInvites(it) // Load invites too
         }
     }
 
@@ -78,19 +79,21 @@ fun GroupManageScreen(
                     }
                 }
 
-                // Row 2: View Invites + Blank
+                // Row 2: View Invites + Spacer
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Button(
-                        onClick = { showInvitesDialog = true },
+                        onClick = {
+                            userId?.let { groupViewModel.loadGroupInvites(it) } // Refresh
+                            showInvitesDialog = true
+                        },
                         modifier = Modifier.weight(1f)
                     ) {
                         Text("View Invites")
                     }
 
-                    // Invisible spacer to maintain uniformity
                     Spacer(modifier = Modifier.weight(1f))
                 }
             }
@@ -112,7 +115,7 @@ fun GroupManageScreen(
             }
         }
 
-        // Create Group Dialog
+        // --- Create Group Dialog ---
         if (showCreateDialog) {
             AlertDialog(
                 onDismissRequest = { showCreateDialog = false },
@@ -157,7 +160,7 @@ fun GroupManageScreen(
             )
         }
 
-        // Join Group Dialog
+        // --- Join Group Dialog ---
         if (showJoinDialog) {
             AlertDialog(
                 onDismissRequest = { showJoinDialog = false },
@@ -191,7 +194,7 @@ fun GroupManageScreen(
             )
         }
 
-        // View Invites Dialog
+        // --- View Invites Dialog ---
         if (showInvitesDialog) {
             AlertDialog(
                 onDismissRequest = { showInvitesDialog = false },
@@ -225,11 +228,13 @@ fun GroupManageScreen(
                                         ) {
                                             TextButton(onClick = {
                                                 groupViewModel.acceptGroupInvite(invite.groupId)
+                                                showInvitesDialog = false
                                             }) {
                                                 Text("✔️ Accept")
                                             }
                                             TextButton(onClick = {
                                                 groupViewModel.declineGroupInvite(invite.groupId)
+                                                showInvitesDialog = false
                                             }) {
                                                 Text("❌ Decline")
                                             }
@@ -251,7 +256,7 @@ fun GroupManageScreen(
 fun GroupCard(
     groupData: GroupData,
     onLeaveGroup: (String) -> Unit,
-    onMessageGroup: (GroupData) -> Unit  // 👈 New parameter
+    onMessageGroup: (GroupData) -> Unit
 ) {
     Card(
         modifier = Modifier

@@ -316,7 +316,7 @@ fun GroupInfoDialog(
                         },
                         modifier = Modifier.size(18.dp)
                     ) {
-                        Icon(Icons.Default.AddCircle, contentDescription = "Copy", modifier = Modifier.size(14.dp))
+                        Icon(Icons.Default.AddCircle, contentDescription = "Copy", modifier = Modifier.size(24.dp))
                     }
                 }
 
@@ -346,17 +346,15 @@ fun InviteUserDialog(groupId: String, onDismiss: () -> Unit, groupViewModel: Gro
         onDismissRequest = onDismiss,
         confirmButton = {
             Button(onClick = {
-                FirebaseFirestore.getInstance().collection("users")
-                    .whereEqualTo("username", username)
-                    .get()
-                    .addOnSuccessListener { snapshot ->
-                        snapshot.documents.firstOrNull()?.id?.let { uid ->
-                            groupViewModel.sendGroupInvite(groupId, uid)
-                        }
-                    }
+                groupViewModel.sendGroupInvite(groupId, username)
                 onDismiss()
             }) {
                 Text("Send Invite")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
             }
         },
         title = { Text("Send Group Invite") },
@@ -364,7 +362,12 @@ fun InviteUserDialog(groupId: String, onDismiss: () -> Unit, groupViewModel: Gro
             Column {
                 Text("Enter username to invite:")
                 Spacer(Modifier.height(8.dp))
-                TextField(value = username, onValueChange = { username = it })
+                TextField(
+                    value = username,
+                    onValueChange = { username = it },
+                    placeholder = { Text("e.g. johndoe") },
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         }
     )

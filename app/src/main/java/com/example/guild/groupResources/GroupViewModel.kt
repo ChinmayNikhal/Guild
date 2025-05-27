@@ -1,6 +1,5 @@
 package com.example.guild.groupResources
 
-import android.annotation.SuppressLint
 import android.util.Log
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -269,12 +268,14 @@ class GroupViewModel : ViewModel() {
 
         userDocRef.get().addOnSuccessListener { userDoc ->
             val inviteGroupIds = userDoc.get("groupInvites") as? List<String> ?: emptyList()
+            val userGroups = userDoc.get("groups") as? List<String> ?: emptyList()
 
             _groupInvites.clear()
-            if (inviteGroupIds.isEmpty()) return@addOnSuccessListener
+            val filteredInvites = inviteGroupIds.filter { it !in userGroups }
+            if (filteredInvites.isEmpty()) return@addOnSuccessListener
 
             val invites = mutableListOf<GroupData>()
-            for (groupId in inviteGroupIds) {
+            for (groupId in filteredInvites) {
                 firestore.collection("Groups").document(groupId).get()
                     .addOnSuccessListener { groupDoc ->
                         val name = groupDoc.getString("groupName") ?: "Unnamed"
@@ -292,10 +293,17 @@ class GroupViewModel : ViewModel() {
                             )
                         )
 
-                        if (invites.size == inviteGroupIds.size) {
+                        if (invites.size == filteredInvites.size) {
                             _groupInvites.addAll(invites.sortedByDescending { it.mostRecentTimestamp })
                         }
                     }
+            }
+
+            // Clean up stale invites from DB (user already joined the group)
+            val staleInvites = inviteGroupIds.filter { it in userGroups }
+            if (staleInvites.isNotEmpty()) {
+                firestore.collection("users").document(userId)
+                    .update("groupInvites", FieldValue.arrayRemove(*staleInvites.toTypedArray()))
             }
         }
     }
@@ -391,13 +399,29 @@ class GroupViewModel : ViewModel() {
             }
     }
 
-    fun sendGroupInvite(groupId: String, userId: String) {
-        val groupRef = firestore.collection("Groups").document(groupId)
-        val userRef = firestore.collection("users").document(userId)
+    fun sendGroupInvite(groupId: String, username: String) {
+        firestore.collection("users")
+            .whereEqualTo("username", username)
+            .get()
+            .addOnSuccessListener { snapshot ->
+                val userDoc = snapshot.documents.firstOrNull()
+                val userId = userDoc?.id
 
-        userRef.update("groupInvites", FieldValue.arrayUnion(groupId))
-            .addOnSuccessListener {
-                Log.d("GroupViewModel", "Invite sent to user: $userId")
+                if (userId != null) {
+                    firestore.collection("users").document(userId)
+                        .update("groupInvites", FieldValue.arrayUnion(groupId))
+                        .addOnSuccessListener {
+                            Log.d("GroupViewModel", "Invite sent to user: $username ($userId)")
+                        }
+                        .addOnFailureListener {
+                            Log.e("GroupViewModel", "Failed to update user invites", it)
+                        }
+                } else {
+                    Log.w("GroupViewModel", "No user found with username: $username")
+                }
+            }
+            .addOnFailureListener { exception ->
+                Log.e("GroupViewModel", "Failed to look up username: $username", exception)
             }
     }
 
@@ -450,5 +474,30 @@ class GroupViewModel : ViewModel() {
             }
     }
 
+    fun sendGroupInviteByUsername(groupId: String, username: String) {
+        firestore.collection("users")
+            .whereEqualTo("username", username)
+            .get()
+            .addOnSuccessListener { snapshot ->
+                val userDoc = snapshot.documents.firstOrNull()
+                if (userDoc != null) {
+                    val userId = userDoc.id
+                    val userGroups = userDoc.get("groups") as? List<String> ?: emptyList()
+
+                    if (userGroups.contains(groupId)) {
+                        Log.d("GroupViewModel", "User is already a member of the group.")
+                        return@addOnSuccessListener
+                    }
+
+                    firestore.collection("users").document(userId)
+                        .update("groupInvites", FieldValue.arrayUnion(groupId))
+                        .addOnSuccessListener {
+                            Log.d("GroupViewModel", "Invite sent to $username ($userId)")
+                        }
+                } else {
+                    Log.d("GroupViewModel", "User not found: $username")
+                }
+            }
+    }
 
 }
