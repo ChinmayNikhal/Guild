@@ -104,7 +104,14 @@ fun MainScreen(
 
             Profile -> ProfileScreen(navController = navController)
             Friends -> FriendsScreen(authViewModel = viewModel())
-            GroupManage -> GroupManageScreen(groupViewModel = groupViewModel)
+            GroupManage -> GroupManageScreen(
+                groupViewModel = groupViewModel,
+                onOpenGroupChat = { group ->
+                    groupViewModel.listenForGroupMessages(group.groupId)
+                    selectedScreen = GroupChat(group.groupId, group.name)
+                }
+            )
+
             MainScreenState.Settings -> SettingsScreen(onLogout = onLogout)
             Groups -> GroupsScreen(
                 onGroupSelected = { groupId, groupName ->
@@ -116,7 +123,8 @@ fun MainScreen(
             is GroupChat -> GroupChatScreen(
                 groupId = screen.groupId,
                 groupName = screen.groupName,
-                groupViewModel = groupViewModel
+                groupViewModel = groupViewModel,
+                onLeaveGroup = { selectedScreen = MainScreenState.GroupManage }
             )
         }
     }

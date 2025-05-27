@@ -34,7 +34,8 @@ import java.util.*
 fun GroupChatScreen(
     groupId: String,
     groupName: String,
-    groupViewModel: GroupViewModel
+    groupViewModel: GroupViewModel,
+    onLeaveGroup: () -> Unit
 ) {
     val messages by groupViewModel.messages.collectAsState()
     val usernames = groupViewModel.senderUsernames
@@ -117,6 +118,7 @@ fun GroupChatScreen(
                             onClick = {
                                 groupViewModel.leaveGroup(groupId)
                                 showMenu = false
+                                onLeaveGroup()
                             }
                         )
                     }

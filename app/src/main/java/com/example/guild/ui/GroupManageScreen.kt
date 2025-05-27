@@ -21,14 +21,16 @@ import com.google.firebase.auth.FirebaseAuth
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GroupManageScreen(groupViewModel: GroupViewModel) {
+fun GroupManageScreen(
+    groupViewModel: GroupViewModel,
+    onOpenGroupChat: (GroupData) -> Unit
+) {
     val currentUser = FirebaseAuth.getInstance().currentUser
     val userId = currentUser?.uid
 
     val userGroups by remember { derivedStateOf { groupViewModel.userGroups } }
     val groupInvites by remember { derivedStateOf { groupViewModel.groupInvites } }
 
-    var selectedGroup by remember { mutableStateOf<GroupData?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var showJoinDialog by remember { mutableStateOf(false) }
     var showInvitesDialog by remember { mutableStateOf(false) }
@@ -41,15 +43,6 @@ fun GroupManageScreen(groupViewModel: GroupViewModel) {
         userId?.let {
             groupViewModel.loadUserGroups(it)
         }
-    }
-
-    selectedGroup?.let { group ->
-        GroupChatScreen(
-            groupId = group.groupId,
-            groupName = group.name,
-            groupViewModel = groupViewModel
-        )
-        return
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -102,7 +95,6 @@ fun GroupManageScreen(groupViewModel: GroupViewModel) {
                 }
             }
 
-
             Spacer(modifier = Modifier.height(16.dp))
 
             if (userGroups.isEmpty()) {
@@ -113,7 +105,7 @@ fun GroupManageScreen(groupViewModel: GroupViewModel) {
                         GroupCard(
                             groupData = group,
                             onLeaveGroup = { groupId -> groupViewModel.leaveGroup(groupId) },
-                            onMessageGroup = { selectedGroup = it }
+                            onMessageGroup = { onOpenGroupChat(it) }
                         )
                     }
                 }
@@ -253,6 +245,7 @@ fun GroupManageScreen(groupViewModel: GroupViewModel) {
         }
     }
 }
+
 
 @Composable
 fun GroupCard(
