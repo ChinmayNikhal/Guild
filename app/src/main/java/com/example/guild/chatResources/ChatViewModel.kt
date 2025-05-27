@@ -1,17 +1,15 @@
 package com.example.guild.chatResources
 
-import androidx.compose.runtime.*
 import android.util.Log
-import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.*
 import androidx.lifecycle.ViewModel
+import com.example.guild.encryption.AESHelper
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.Query
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import java.util.UUID
+import java.util.*
 
 class ChatViewModel : ViewModel() {
 
@@ -43,7 +41,14 @@ class ChatViewModel : ViewModel() {
                 }
 
                 val msgs = snapshot?.documents?.mapNotNull { doc ->
-                    doc.toObject(ChatMessage::class.java)
+                    doc.toObject(ChatMessage::class.java)?.copy(
+                        text = try {
+                            AESHelper.decrypt(doc.getString("text") ?: "")
+                        } catch (ex: Exception) {
+                            Log.e("ChatViewModel", "Decryption failed", ex)
+                            "[Encrypted]"
+                        }
+                    )
                 } ?: emptyList()
 
                 // Fetch usernames for all unique senderIds
@@ -56,11 +61,18 @@ class ChatViewModel : ViewModel() {
     }
 
     fun sendMessage(chatId: String, text: String) {
+        val encryptedText = try {
+            AESHelper.encrypt(text)
+        } catch (e: Exception) {
+            Log.e("ChatViewModel", "Encryption failed", e)
+            return
+        }
+
         val messageId = UUID.randomUUID().toString()
         val message = ChatMessage(
             messageId = messageId,
             senderId = auth.currentUser?.uid ?: "unknown",
-            text = text,
+            text = encryptedText,
             timestamp = System.currentTimeMillis()
         )
 
@@ -91,7 +103,6 @@ class ChatViewModel : ViewModel() {
 
                     val otherUserId = participants.firstOrNull { it != currentUserId } ?: return@forEach
 
-                    // Fetch the username of the other participant
                     firestore.collection("users")
                         .document(otherUserId)
                         .get()
@@ -126,7 +137,6 @@ class ChatViewModel : ViewModel() {
 
         chatRef.get().addOnSuccessListener { doc ->
             if (!doc.exists()) {
-                // Chat doesn't exist (maybe due to error), create fallback
                 val chatData = hashMapOf(
                     "participants" to listOf(currentUserId, otherUserId),
                     "lastTimestamp" to FieldValue.serverTimestamp()
@@ -182,5 +192,4 @@ class ChatViewModel : ViewModel() {
                 }
             }
     }
-
 }

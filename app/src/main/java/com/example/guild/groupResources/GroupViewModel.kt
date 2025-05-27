@@ -1,11 +1,12 @@
 package com.example.guild.groupResources
 
-import android.annotation.SuppressLint
+import android.util.Base64
 import android.util.Log
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.lifecycle.ViewModel
 import com.example.guild.chatResources.ChatMessage
+import com.example.guild.utils.AESCipher
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
@@ -15,6 +16,7 @@ import com.google.firebase.firestore.auth.User
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.util.UUID
+import javax.crypto.spec.SecretKeySpec
 
 data class Group(
     val id: String = "",
@@ -131,63 +133,152 @@ class GroupViewModel : ViewModel() {
         _userGroups.removeAll { it.groupId == groupId }
     }
 
+
     fun sendGroupMessage(groupId: String, text: String, ttl: Long = 0L) {
-        val senderId = com.example.guild.groupResources.auth.currentUser?.uid ?: return
+        val senderId = auth.currentUser?.uid ?: return
         val messageId = UUID.randomUUID().toString()
         val timestamp = System.currentTimeMillis()
 
-        val message = hashMapOf(
-            "messageId" to messageId,
-            "senderId" to senderId,
-            "text" to text,
-            "timestamp" to timestamp,
-            "ttl" to ttl
-        )
+        val groupRef = firestore.collection("Groups").document(groupId)
 
-        val messageRef = firestore.collection("Groups")
-            .document(groupId)
-            .collection("Messages")
-            .document(messageId)
+        groupRef.get().addOnSuccessListener { snapshot ->
+            val encodedKey = snapshot.getString("aesKey")
 
-        messageRef.set(message)
+            if (encodedKey.isNullOrEmpty()) {
+                Log.w("GroupViewModel", "❌ No AES key found for group $groupId — generating fallback key")
 
-        firestore.collection("Groups").document(groupId)
-            .update(
-                mapOf(
-                    "mostRecentMessageContent" to text,
-                    "mostRecentMessageTimestamp" to timestamp
-                )
-            )
-    }
+                // Generate and store key
+                val newKey = AESCipher.generateKey()
+                val newEncodedKey = Base64.encodeToString(newKey.encoded, Base64.DEFAULT)
 
-    fun listenForGroupMessages(groupId: String) {
-        firestore.collection("Groups")
-            .document(groupId)
-            .collection("Messages")
-            .orderBy("timestamp", Query.Direction.ASCENDING)
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    Log.w("ChatViewModel", "Failed to listen for group messages", error)
-                    return@addSnapshotListener
+                // Update Firestore with the new key, then retry sending the message
+                groupRef.update("aesKey", newEncodedKey).addOnSuccessListener {
+                    // Retry sending message after key is saved
+                    sendGroupMessage(groupId, text, ttl)
                 }
-
-                val now = System.currentTimeMillis()
-                val messages = snapshot?.documents?.mapNotNull { doc ->
-                    val ttl = doc.getLong("ttl") ?: 0L
-                    val timestamp = doc.getLong("timestamp") ?: return@mapNotNull null
-
-                    // TTL logic: only keep if not expired or ttl == 0
-                    if (ttl == 0L || (timestamp + ttl > now)) {
-                        doc.toObject(ChatMessage::class.java)
-                    } else {
-                        null
-                    }
-                } ?: emptyList()
-
-                _messages.value = messages
-                messages.map { it.senderId }.distinct().forEach { fetchUsernameFor(it) }
+                return@addOnSuccessListener
             }
+
+            try {
+                val keyBytes = Base64.decode(encodedKey, Base64.DEFAULT)
+                val secretKey = SecretKeySpec(keyBytes, "AES")
+                val encryptedText = AESCipher.encrypt(text, secretKey)
+
+                Log.d("GroupViewModel", "🔐 Encrypted message: $encryptedText")
+
+                val message = mapOf(
+                    "messageId" to messageId,
+                    "senderId" to senderId,
+                    "text" to encryptedText,
+                    "timestamp" to timestamp,
+                    "ttl" to ttl
+                )
+
+                Log.d("GroupViewModel", "📤 Uploading message: $message")
+
+                groupRef.collection("Messages").document(messageId)
+                    .set(message)
+                    .addOnSuccessListener {
+                        Log.d("GroupViewModel", "✅ Message sent successfully.")
+                    }
+                    .addOnFailureListener { e ->
+                        Log.e("GroupViewModel", "❌ Failed to send message: ${e.localizedMessage}", e)
+                    }
+
+                // Update preview info
+                groupRef.update(
+                    "mostRecentMessageContent", encryptedText,
+                    "mostRecentMessageTimestamp", timestamp
+                )
+
+            } catch (e: Exception) {
+                Log.e("GroupViewModel", "❌ Encryption or upload failed: ${e.localizedMessage}", e)
+            }
+        }.addOnFailureListener { e ->
+            Log.e("GroupViewModel", "❌ Failed to fetch group AES key: ${e.localizedMessage}", e)
+        }
     }
+
+
+
+    fun listenForGroupMessages(groupId: String, text: String? = null, ttl: Long = 0L) {
+        val groupRef = firestore.collection("Groups").document(groupId)
+
+        groupRef.get().addOnSuccessListener { groupSnapshot ->
+            val encodedKey = groupSnapshot.getString("aesKey")
+
+            if (encodedKey.isNullOrEmpty()) {
+                Log.w("GroupViewModel", "❌ No AES key found for group $groupId — generating fallback key")
+
+                val newKey = AESCipher.generateKey()
+                val newEncodedKey = Base64.encodeToString(newKey.encoded, Base64.DEFAULT)
+
+                groupRef.update("aesKey", newEncodedKey).addOnSuccessListener {
+                    Log.d("GroupViewModel", "✅ Fallback AES key stored.")
+                    if (!text.isNullOrEmpty()) {
+                        Log.d("GroupViewModel", "📤 Retrying message sending.")
+                        sendGroupMessage(groupId, text, ttl)
+                    }
+                }
+                return@addOnSuccessListener
+            }
+
+
+            val keyBytes = Base64.decode(encodedKey, Base64.DEFAULT)
+            val secretKey = SecretKeySpec(keyBytes, "AES")
+
+            groupRef.collection("Messages")
+                .orderBy("timestamp", Query.Direction.ASCENDING)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        Log.e("GroupViewModel", "❌ Firestore snapshot error: ${error.localizedMessage}", error)
+                        return@addSnapshotListener
+                    }
+
+                    if (snapshot == null) {
+                        Log.w("GroupViewModel", "⚠️ Snapshot is null for group $groupId")
+                        return@addSnapshotListener
+                    }
+
+                    Log.d("GroupViewModel", "📥 Fetched ${snapshot.documents.size} messages")
+
+                    val now = System.currentTimeMillis()
+                    val decryptedMessages = snapshot.documents.mapNotNull { doc ->
+                        val ttl = doc.getLong("ttl") ?: 0L
+                        val timestamp = doc.getLong("timestamp") ?: return@mapNotNull null
+
+                        if (ttl == 0L || timestamp + ttl > now) {
+                            val encryptedText = doc.getString("text") ?: return@mapNotNull null
+                            return@mapNotNull try {
+                                val decryptedText = AESCipher.decrypt(encryptedText, secretKey)
+                                Log.d("GroupViewModel", "🟢 Decrypted: $decryptedText")
+                                ChatMessage(
+                                    messageId = doc.getString("messageId") ?: "",
+                                    senderId = doc.getString("senderId") ?: "",
+                                    text = decryptedText,
+                                    timestamp = timestamp,
+                                    ttl = ttl
+                                )
+                            } catch (e: Exception) {
+                                Log.e("GroupViewModel", "❌ Decryption failed: ${e.localizedMessage}", e)
+                                null
+                            }
+                        } else {
+                            Log.d("GroupViewModel", "🕓 Skipping expired message ${doc.id}")
+                            null
+                        }
+                    }
+
+                    Log.d("GroupViewModel", "✅ Decrypted ${decryptedMessages.size} messages")
+                    _messages.value = decryptedMessages
+                    decryptedMessages.map { it.senderId }.distinct().forEach { fetchUsernameFor(it) }
+                }
+        }.addOnFailureListener { e ->
+            Log.e("GroupViewModel", "❌ Failed to load group info: ${e.localizedMessage}", e)
+        }
+    }
+
+
 
     private fun fetchUsernameFor(senderId: String) {
         if (_senderUsernames.containsKey(senderId)) return
@@ -269,12 +360,14 @@ class GroupViewModel : ViewModel() {
 
         userDocRef.get().addOnSuccessListener { userDoc ->
             val inviteGroupIds = userDoc.get("groupInvites") as? List<String> ?: emptyList()
+            val userGroups = userDoc.get("groups") as? List<String> ?: emptyList()
 
             _groupInvites.clear()
-            if (inviteGroupIds.isEmpty()) return@addOnSuccessListener
+            val filteredInvites = inviteGroupIds.filter { it !in userGroups }
+            if (filteredInvites.isEmpty()) return@addOnSuccessListener
 
             val invites = mutableListOf<GroupData>()
-            for (groupId in inviteGroupIds) {
+            for (groupId in filteredInvites) {
                 firestore.collection("Groups").document(groupId).get()
                     .addOnSuccessListener { groupDoc ->
                         val name = groupDoc.getString("groupName") ?: "Unnamed"
@@ -292,10 +385,17 @@ class GroupViewModel : ViewModel() {
                             )
                         )
 
-                        if (invites.size == inviteGroupIds.size) {
+                        if (invites.size == filteredInvites.size) {
                             _groupInvites.addAll(invites.sortedByDescending { it.mostRecentTimestamp })
                         }
                     }
+            }
+
+            // Clean up stale invites from DB (user already joined the group)
+            val staleInvites = inviteGroupIds.filter { it in userGroups }
+            if (staleInvites.isNotEmpty()) {
+                firestore.collection("users").document(userId)
+                    .update("groupInvites", FieldValue.arrayRemove(*staleInvites.toTypedArray()))
             }
         }
     }
@@ -391,13 +491,29 @@ class GroupViewModel : ViewModel() {
             }
     }
 
-    fun sendGroupInvite(groupId: String, userId: String) {
-        val groupRef = firestore.collection("Groups").document(groupId)
-        val userRef = firestore.collection("users").document(userId)
+    fun sendGroupInvite(groupId: String, username: String) {
+        firestore.collection("users")
+            .whereEqualTo("username", username)
+            .get()
+            .addOnSuccessListener { snapshot ->
+                val userDoc = snapshot.documents.firstOrNull()
+                val userId = userDoc?.id
 
-        userRef.update("groupInvites", FieldValue.arrayUnion(groupId))
-            .addOnSuccessListener {
-                Log.d("GroupViewModel", "Invite sent to user: $userId")
+                if (userId != null) {
+                    firestore.collection("users").document(userId)
+                        .update("groupInvites", FieldValue.arrayUnion(groupId))
+                        .addOnSuccessListener {
+                            Log.d("GroupViewModel", "Invite sent to user: $username ($userId)")
+                        }
+                        .addOnFailureListener {
+                            Log.e("GroupViewModel", "Failed to update user invites", it)
+                        }
+                } else {
+                    Log.w("GroupViewModel", "No user found with username: $username")
+                }
+            }
+            .addOnFailureListener { exception ->
+                Log.e("GroupViewModel", "Failed to look up username: $username", exception)
             }
     }
 
@@ -450,5 +566,30 @@ class GroupViewModel : ViewModel() {
             }
     }
 
+    fun sendGroupInviteByUsername(groupId: String, username: String) {
+        firestore.collection("users")
+            .whereEqualTo("username", username)
+            .get()
+            .addOnSuccessListener { snapshot ->
+                val userDoc = snapshot.documents.firstOrNull()
+                if (userDoc != null) {
+                    val userId = userDoc.id
+                    val userGroups = userDoc.get("groups") as? List<String> ?: emptyList()
+
+                    if (userGroups.contains(groupId)) {
+                        Log.d("GroupViewModel", "User is already a member of the group.")
+                        return@addOnSuccessListener
+                    }
+
+                    firestore.collection("users").document(userId)
+                        .update("groupInvites", FieldValue.arrayUnion(groupId))
+                        .addOnSuccessListener {
+                            Log.d("GroupViewModel", "Invite sent to $username ($userId)")
+                        }
+                } else {
+                    Log.d("GroupViewModel", "User not found: $username")
+                }
+            }
+    }
 
 }
