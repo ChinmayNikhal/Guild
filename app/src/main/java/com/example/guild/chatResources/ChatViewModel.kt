@@ -40,16 +40,47 @@ class ChatViewModel : ViewModel() {
                     return@addSnapshotListener
                 }
 
-                val msgs = snapshot?.documents?.mapNotNull { doc ->
-                    doc.toObject(ChatMessage::class.java)?.copy(
-                        text = try {
-                            AESHelper.decrypt(doc.getString("text") ?: "")
+                val currentTime = System.currentTimeMillis()
+                val msgs = mutableListOf<ChatMessage>()
+
+                snapshot?.documents?.forEach { doc ->
+                    try {
+                        val chatMessage = doc.toObject(ChatMessage::class.java) ?: return@forEach
+
+                        // Check for expiration
+                        if (chatMessage.disappearing && chatMessage.seenAt > 0) {
+                            val expireTime = chatMessage.seenAt + (1 * 60 * 1000) // 5 minutes
+                            if (currentTime >= expireTime) {
+                                // Delete expired disappearing message
+                                firestore.collection("chats")
+                                    .document(chatId)
+                                    .collection("messages")
+                                    .document(chatMessage.messageId)
+                                    .delete()
+                                    .addOnSuccessListener {
+                                        Log.d("ChatViewModel", "Message deleted after expiration")
+                                    }
+                                    .addOnFailureListener {
+                                        Log.e("ChatViewModel", "Failed to delete expired message", it)
+                                    }
+                                return@forEach
+                            }
+                        }
+
+                        // Decrypt text
+                        val decryptedText = try {
+                            AESHelper.decrypt(chatMessage.text)
                         } catch (ex: Exception) {
                             Log.e("ChatViewModel", "Decryption failed", ex)
                             "[Encrypted]"
                         }
-                    )
-                } ?: emptyList()
+
+                        msgs.add(chatMessage.copy(text = decryptedText))
+
+                    } catch (ex: Exception) {
+                        Log.e("ChatViewModel", "Error processing message", ex)
+                    }
+                }
 
                 // Fetch usernames for all unique senderIds
                 msgs.map { it.senderId }.distinct().forEach { senderId ->
@@ -60,7 +91,10 @@ class ChatViewModel : ViewModel() {
             }
     }
 
-    fun sendMessage(chatId: String, text: String) {
+
+
+
+    fun sendMessage(chatId: String, text: String, isDisappearing: Boolean) {
         val encryptedText = try {
             AESHelper.encrypt(text)
         } catch (e: Exception) {
@@ -73,7 +107,9 @@ class ChatViewModel : ViewModel() {
             messageId = messageId,
             senderId = auth.currentUser?.uid ?: "unknown",
             text = encryptedText,
-            timestamp = System.currentTimeMillis()
+            timestamp = System.currentTimeMillis(),
+            seenAt = 0L,
+            disappearing = isDisappearing
         )
 
         firestore.collection("chats")
@@ -82,6 +118,7 @@ class ChatViewModel : ViewModel() {
             .document(messageId)
             .set(message)
     }
+
 
     fun loadUserChats() {
         val currentUserId = auth.currentUser?.uid ?: return
@@ -121,6 +158,21 @@ class ChatViewModel : ViewModel() {
                 }
             }
     }
+
+    fun markMessageAsSeen(chatId: String, messageId: String) {
+        firestore.collection("chats")
+            .document(chatId)
+            .collection("messages")
+            .document(messageId)
+            .update("seenAt", System.currentTimeMillis())
+            .addOnSuccessListener {
+                Log.d("ChatViewModel", "Message $messageId marked as seen.")
+            }
+            .addOnFailureListener { e ->
+                Log.e("ChatViewModel", "Failed to mark message as seen", e)
+            }
+    }
+
 
     fun startOrNavigateToChatWith(
         otherUserId: String,
