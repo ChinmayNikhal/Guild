@@ -26,11 +26,15 @@ import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
 import com.example.guild.R
 import com.example.guild.chatResources.ChatMessage
-import com.example.guild.chatResources.ChatScreen
 import com.example.guild.chatResources.ChatViewModel
+import com.example.guild.chatResources.ChatScreen
+import com.example.guild.groupResources.GroupChatScreen
+import com.example.guild.groupResources.GroupViewModel
 import com.example.guild.ui.GroupManageScreen
 import com.example.guild.ui.MainScreenState.*
 import com.example.guild.ui.theme.GuildTheme
+import androidx.compose.runtime.getValue
+import com.google.firebase.auth.FirebaseAuth
 
 
 sealed class MainScreenState {
@@ -54,71 +58,74 @@ fun MainScreen(
     var selectedScreen by remember { mutableStateOf<MainScreenState>(MainScreenState.DM) }
 
     val chatViewModel: ChatViewModel = viewModel()
+    val groupViewModel: GroupViewModel = viewModel()
     val messages by chatViewModel.messages.collectAsState(initial = emptyList())
 
     Row(modifier = Modifier.fillMaxSize()) {
         Sidebar(
             selectedScreen = when (selectedScreen) {
-                is MainScreenState.DM -> "DM"
-                is MainScreenState.Profile -> "Profile"
-                is MainScreenState.Friends -> "Friends"
+                is DM -> "DM"
+                is Profile -> "Profile"
+                is Friends -> "Friends"
                 is MainScreenState.Settings -> "Settings"
-                is MainScreenState.Groups -> "Groups"
-                is MainScreenState.Chat -> "Chat"
-                is MainScreenState.GroupManage-> "GroupManage"
-                is MainScreenState.GroupChat -> TODO()
+                is Groups -> "Groups"
+                is Chat -> "Chat"
+                is GroupManage-> "GroupManage"
+                is GroupChat -> "GroupChat"
             },
             onScreenSelected = { screen ->
                 selectedScreen = when (screen) {
-                    "DM" -> MainScreenState.DM
-                    "Friends" -> MainScreenState.Friends
+                    "DM" -> DM
+                    "Friends" -> Friends
                     "Settings" -> MainScreenState.Settings
-                    "Profile" -> MainScreenState.Profile
-                    "Groups" -> MainScreenState.Groups
-                    "GroupManage" -> MainScreenState.GroupManage
-                    else -> MainScreenState.DM
+                    "Profile" -> Profile
+                    "GroupManage" -> GroupManage
+                    "Groups" -> Groups
+
+                    else -> DM
                 }
             }
         )
 
         when (val screen = selectedScreen) {
-            is MainScreenState.DM -> DirectMessagesScreen(
+            is DM -> DirectMessagesScreen(
                 onChatSelected = { chatId, otherUserId, otherUsername ->
                     chatViewModel.listenForMessages(chatId)
                     selectedScreen = Chat(chatId, otherUserId, otherUsername)
                 }
             )
 
-            is MainScreenState.Chat -> ChatScreen(
+            is Chat -> ChatScreen(
                 chatId = screen.chatId,
                 otherUserId = screen.otherUserId,
                 username = screen.otherUsername,
                 chatViewModel = chatViewModel
             )
 
-            MainScreenState.Profile -> ProfileScreen(navController = navController)
-            MainScreenState.Friends -> FriendsScreen(authViewModel = viewModel())
-
-            MainScreenState.GroupManage -> GroupManageScreen(
-                onOpenGroupChat = { groupId, groupName ->
-                    selectedScreen = MainScreenState.GroupChat(groupId, groupName)
+            Profile -> ProfileScreen(navController = navController)
+            Friends -> FriendsScreen(authViewModel = viewModel())
+            GroupManage -> GroupManageScreen(
+                groupViewModel = groupViewModel,
+                onOpenGroupChat = { group ->
+                    groupViewModel.listenForGroupMessages(group.groupId)
+                    selectedScreen = GroupChat(group.groupId, group.name)
                 }
             )
 
             MainScreenState.Settings -> SettingsScreen(onLogout = onLogout)
-
-            MainScreenState.Groups -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.DarkGray),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("Groups Page", color = Color.White, fontSize = 24.sp)
-                }
-            }
-
-            is MainScreenState.GroupChat -> TODO()
+            Groups -> GroupsScreen(
+                onGroupSelected = { groupId, groupName ->
+                    groupViewModel.listenForGroupMessages(groupId)
+                    selectedScreen = GroupChat(groupId, groupName)
+                },
+                groupViewModel = groupViewModel
+            )
+            is GroupChat -> GroupChatScreen(
+                groupId = screen.groupId,
+                groupName = screen.groupName,
+                groupViewModel = groupViewModel,
+                onLeaveGroup = { selectedScreen = MainScreenState.GroupManage }
+            )
         }
     }
 }
@@ -323,19 +330,58 @@ fun Sidebar(selectedScreen: String, onScreenSelected: (String) -> Unit) {
     }
 }
 
-
 @Composable
-fun GroupsScreen() {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text("Groups Page", color = Color.White)
+fun GroupsScreen(
+    onGroupSelected: (groupId: String, groupName: String) -> Unit,
+    groupViewModel: GroupViewModel = viewModel()
+) {
+    val currentUser = FirebaseAuth.getInstance().currentUser
+    val userId = currentUser?.uid
+
+    val groupList by groupViewModel.groupPreviews.collectAsState(initial = emptyList())
+
+    LaunchedEffect(Unit) {
+        groupViewModel.loadUserGroups(userId.toString())
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .padding(16.dp)
+    ) {
+        Text("Groups", color = Color.White, fontSize = 24.sp)
+        Spacer(modifier = Modifier.height(16.dp))
+
+        if (groupList.isEmpty()) {
+            Text(text = "Loading Groups...", color = Color.Gray)
+        }
+
+        groupList.sortedByDescending { it.mostRecentTimestamp }.forEach { group ->
+        Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp)
+                    .clickable {
+                        onGroupSelected(group.groupId, group.name)
+                    },
+                colors = CardDefaults.cardColors(containerColor = Color.Black),
+                shape = MaterialTheme.shapes.medium,
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text(
+                        text = group.name,
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        text = group.mostRecentMessage,
+                        color = Color.LightGray,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
     }
 }
-
-@Composable
-fun GroupChatsScreen() {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text("Group Chats Page", color = Color.White)
-    }
-}
-
-// DateRange  Menu  Person  AccountBox

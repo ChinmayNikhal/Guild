@@ -13,3 +13,5 @@
 .cxx
 local.properties
 /google-services.json
+auth/AuthViewModel_Base.txt
+auth/MainScreenChanges.txt

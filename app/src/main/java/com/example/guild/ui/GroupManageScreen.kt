@@ -3,124 +3,318 @@ package com.example.guild.ui
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.guild.chatResources.ChatViewModel
-import com.example.guild.chatResources.GroupData
+import androidx.compose.ui.unit.sp
+import com.example.guild.groupResources.GroupChatScreen
+import com.example.guild.groupResources.GroupData
+import com.example.guild.groupResources.GroupViewModel
+import com.google.firebase.auth.FirebaseAuth
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GroupManageScreen(
-    chatViewModel: ChatViewModel = viewModel(),
-    onOpenGroupChat: (String, String) -> Unit
+    groupViewModel: GroupViewModel,
+    onOpenGroupChat: (GroupData) -> Unit
 ) {
-    var groupName by remember { mutableStateOf("") }
-    var groupDescription by remember { mutableStateOf("") }
+    val currentUser = FirebaseAuth.getInstance().currentUser
+    val userId = currentUser?.uid
 
-    // Load user groups on first composition
-    LaunchedEffect(Unit) {
-        chatViewModel.loadUserGroups()
+    val userGroups by remember { derivedStateOf { groupViewModel.userGroups } }
+    val groupInvites by remember { derivedStateOf { groupViewModel.groupInvites } }
+
+    var showCreateDialog by remember { mutableStateOf(false) }
+    var showJoinDialog by remember { mutableStateOf(false) }
+    var showInvitesDialog by remember { mutableStateOf(false) }
+
+    var groupName by remember { mutableStateOf(TextFieldValue("")) }
+    var groupDescription by remember { mutableStateOf(TextFieldValue("")) }
+    var joinGroupId by remember { mutableStateOf(TextFieldValue("")) }
+
+    LaunchedEffect(userId) {
+        userId?.let {
+            groupViewModel.loadUserGroups(it)
+            groupViewModel.loadGroupInvites(it) // Load invites too
+        }
     }
 
-    Column(modifier = Modifier
-        .fillMaxSize()
-        .padding(16.dp)) {
-
-        Text("Create a New Group", style = MaterialTheme.typography.titleMedium)
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedTextField(
-            value = groupName,
-            onValueChange = { groupName = it },
-            label = { Text("Group Name") },
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedTextField(
-            value = groupDescription,
-            onValueChange = { groupDescription = it },
-            label = { Text("Group Description") },
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Button(
-            onClick = {
-                if (groupName.isNotBlank()) {
-                    chatViewModel.createGroup(groupName.trim(), groupDescription.trim())
-                    groupName = ""
-                    groupDescription = ""
-                }
-            },
-            modifier = Modifier.align(Alignment.End)
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp)
         ) {
-            Text("Add +")
+            Text("Groups", fontSize = 24.sp, color = MaterialTheme.colorScheme.onBackground)
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                // Row 1: Join + Create
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Button(
+                        onClick = { showJoinDialog = true },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Join Group")
+                    }
+
+                    Button(
+                        onClick = { showCreateDialog = true },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Create Group")
+                    }
+                }
+
+                // Row 2: View Invites + Spacer
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            userId?.let { groupViewModel.loadGroupInvites(it) } // Refresh
+                            showInvitesDialog = true
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("View Invites")
+                    }
+
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            if (userGroups.isEmpty()) {
+                Text("No groups joined yet.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                LazyColumn {
+                    items(userGroups) { group ->
+                        GroupCard(
+                            groupData = group,
+                            onLeaveGroup = { groupId -> groupViewModel.leaveGroup(groupId) },
+                            onMessageGroup = { onOpenGroupChat(it) }
+                        )
+                    }
+                }
+            }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Text("Your Groups", style = MaterialTheme.typography.titleMedium)
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(chatViewModel.userGroups) { group ->
-                GroupListItem(
-                    group = group,
-                    onLeave = { chatViewModel.leaveGroup(group.groupId) },
-                    onMessage = {
-                        onOpenGroupChat(group.groupId, group.name)
+        // --- Create Group Dialog ---
+        if (showCreateDialog) {
+            AlertDialog(
+                onDismissRequest = { showCreateDialog = false },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val name = groupName.text.trim()
+                        val desc = groupDescription.text.trim()
+                        if (name.isNotEmpty()) {
+                            groupViewModel.createGroup(name, desc)
+                            groupName = TextFieldValue("")
+                            groupDescription = TextFieldValue("")
+                            showCreateDialog = false
+                        }
+                    }) {
+                        Text("Create")
                     }
-                )
-                Divider()
-            }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showCreateDialog = false }) {
+                        Text("Cancel")
+                    }
+                },
+                title = { Text("New Group") },
+                text = {
+                    Column {
+                        OutlinedTextField(
+                            value = groupName,
+                            onValueChange = { groupName = it },
+                            label = { Text("Group Name") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = groupDescription,
+                            onValueChange = { groupDescription = it },
+                            label = { Text("Description") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                shape = RoundedCornerShape(16.dp)
+            )
+        }
+
+        // --- Join Group Dialog ---
+        if (showJoinDialog) {
+            AlertDialog(
+                onDismissRequest = { showJoinDialog = false },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val groupId = joinGroupId.text.trim()
+                        if (groupId.isNotEmpty()) {
+                            groupViewModel.sendJoinRequest(groupId)
+                            joinGroupId = TextFieldValue("")
+                            showJoinDialog = false
+                        }
+                    }) {
+                        Text("Send Request")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showJoinDialog = false }) {
+                        Text("Cancel")
+                    }
+                },
+                title = { Text("Join Group") },
+                text = {
+                    OutlinedTextField(
+                        value = joinGroupId,
+                        onValueChange = { joinGroupId = it },
+                        label = { Text("Group ID") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                },
+                shape = RoundedCornerShape(16.dp)
+            )
+        }
+
+        // --- View Invites Dialog ---
+        if (showInvitesDialog) {
+            AlertDialog(
+                onDismissRequest = { showInvitesDialog = false },
+                confirmButton = {
+                    TextButton(onClick = { showInvitesDialog = false }) {
+                        Text("Close")
+                    }
+                },
+                title = { Text("Group Invites") },
+                text = {
+                    if (groupInvites.isEmpty()) {
+                        Text("No group invites.")
+                    } else {
+                        Column {
+                            groupInvites.forEach { invite ->
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp),
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Text(invite.name, fontSize = 16.sp)
+                                        if (invite.description.isNotBlank()) {
+                                            Text(invite.description, fontSize = 14.sp, color = Color.Gray)
+                                        }
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            modifier = Modifier.padding(top = 8.dp)
+                                        ) {
+                                            TextButton(onClick = {
+                                                groupViewModel.acceptGroupInvite(invite.groupId)
+                                                showInvitesDialog = false
+                                            }) {
+                                                Text("✔️ Accept")
+                                            }
+                                            TextButton(onClick = {
+                                                groupViewModel.declineGroupInvite(invite.groupId)
+                                                showInvitesDialog = false
+                                            }) {
+                                                Text("❌ Decline")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                shape = RoundedCornerShape(16.dp)
+            )
         }
     }
 }
 
+
 @Composable
-fun GroupListItem(
-    group: GroupData,
-    onLeave: () -> Unit,
-    onMessage: () -> Unit
+fun GroupCard(
+    groupData: GroupData,
+    onLeaveGroup: (String) -> Unit,
+    onMessageGroup: (GroupData) -> Unit
 ) {
-    Row(
+    Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(vertical = 6.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = group.name,
-                style = MaterialTheme.typography.titleMedium
-            )
-            Text(
-                text = group.description,
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(groupData.name, color = MaterialTheme.colorScheme.onSurface, fontSize = 18.sp)
+                    if (groupData.description.isNotBlank()) {
+                        Text(
+                            groupData.description,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 14.sp,
+                            maxLines = 1
+                        )
+                    }
+                }
 
-        Spacer(modifier = Modifier.width(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    IconButton(
+                        onClick = { onLeaveGroup(groupData.groupId) },
+                        colors = IconButtonDefaults.iconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    ) {
+                        Text("❌", fontSize = 14.sp)
+                    }
 
-        Button(onClick = onMessage) {
-            Text("Message")
-        }
+                    IconButton(
+                        onClick = { onMessageGroup(groupData) },  // 👈 Trigger navigation
+                        colors = IconButtonDefaults.iconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    ) {
+                        Text("💬", fontSize = 14.sp)
+                    }
+                }
+            }
 
-        Spacer(modifier = Modifier.width(8.dp))
-
-        OutlinedButton(onClick = onLeave) {
-            Text("Leave")
+            if (groupData.mostRecentMessage.isNotBlank()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "Latest: ${groupData.mostRecentMessage}",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp
+                )
+            }
         }
     }
 }
