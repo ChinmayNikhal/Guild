@@ -6,7 +6,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountBox
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Menu
@@ -25,17 +24,19 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
 import com.example.guild.R
-import com.example.guild.chatResources.ChatMessage
 import com.example.guild.chatResources.ChatViewModel
 import com.example.guild.chatResources.ChatScreen
 import com.example.guild.groupResources.GroupChatScreen
 import com.example.guild.groupResources.GroupViewModel
-import com.example.guild.ui.GroupManageScreen
 import com.example.guild.ui.MainScreenState.*
 import com.example.guild.ui.theme.GuildTheme
 import androidx.compose.runtime.getValue
+import com.example.guild.calendar.model.Task
+import com.example.guild.calendar.ui.CreateOrEditTaskScreen
+import com.example.guild.calendar.ui.TaskDetailScreen
+import com.example.guild.calendar.ui.TaskListScreen
+import com.example.guild.calendar.viewmodel.TaskViewModel
 import com.google.firebase.auth.FirebaseAuth
-
 
 sealed class MainScreenState {
     object DM : MainScreenState()
@@ -44,9 +45,11 @@ sealed class MainScreenState {
     object Settings : MainScreenState()
     object Groups : MainScreenState()
     object GroupManage : MainScreenState()
+    object Calendar : MainScreenState()
+    object CreateTask : MainScreenState()
+    data class TaskDetail(val task: Task) : MainScreenState() // New state for task details
     data class GroupChat(val groupId: String, val groupName: String) : MainScreenState()
     data class Chat(val chatId: String, val otherUserId: String, val otherUsername: String) : MainScreenState()
-
 }
 
 @Composable
@@ -59,7 +62,10 @@ fun MainScreen(
 
     val chatViewModel: ChatViewModel = viewModel()
     val groupViewModel: GroupViewModel = viewModel()
+    val taskViewModel: TaskViewModel = viewModel()
     val messages by chatViewModel.messages.collectAsState(initial = emptyList())
+    val currentUser = FirebaseAuth.getInstance().currentUser
+    val currentUserId = remember { currentUser?.uid ?: "" }
 
     Row(modifier = Modifier.fillMaxSize()) {
         Sidebar(
@@ -70,8 +76,11 @@ fun MainScreen(
                 is MainScreenState.Settings -> "Settings"
                 is Groups -> "Groups"
                 is Chat -> "Chat"
-                is GroupManage-> "GroupManage"
+                is GroupManage -> "GroupManage"
                 is GroupChat -> "GroupChat"
+                is MainScreenState.Calendar -> "Calendar"
+                is CreateTask -> "CreateTask"
+                is TaskDetail -> "TaskDetail"
             },
             onScreenSelected = { screen ->
                 selectedScreen = when (screen) {
@@ -81,7 +90,8 @@ fun MainScreen(
                     "Profile" -> Profile
                     "GroupManage" -> GroupManage
                     "Groups" -> Groups
-
+                    "Calendar" -> MainScreenState.Calendar
+                    "CreateTask" -> CreateTask
                     else -> DM
                 }
             }
@@ -125,6 +135,42 @@ fun MainScreen(
                 groupName = screen.groupName,
                 groupViewModel = groupViewModel,
                 onLeaveGroup = { selectedScreen = MainScreenState.GroupManage }
+            )
+            MainScreenState.Calendar -> TaskListScreen(
+                viewModel = taskViewModel,
+                currentUserId = currentUserId,
+                onTaskClick = { task ->
+                    selectedScreen = TaskDetail(task) // Navigate to TaskDetail state
+                },
+                onCreateTaskClick = {
+                    selectedScreen = CreateTask // Navigate to the CreateTask state
+                }
+            )
+            CreateTask -> CreateOrEditTaskScreen(
+                currentUserId = currentUserId,
+                onSave = { task ->
+                    taskViewModel.createTask(task)
+                    selectedScreen = MainScreenState.Calendar // Go back to the task list
+                },
+                onCancel = {
+                    selectedScreen = MainScreenState.Calendar // Go back to the task list
+                }
+            )
+            is TaskDetail -> TaskDetailScreen(
+                task = screen.task,
+                currentUserId = currentUserId,
+                isCreator = screen.task.createdBy == currentUserId,
+                onEditClick = {
+                    selectedScreen = CreateTask // Navigate to edit screen (you might need to pass the task here later)
+                },
+                onDeleteClick = {
+                    taskViewModel.deleteTask(screen.task.id, currentUserId)
+                    selectedScreen = MainScreenState.Calendar // Go back to the task list
+                },
+                onStatusChange = { newStatus ->
+                    val updatedTask = screen.task.copy(status = newStatus)
+                    taskViewModel.updateTask(updatedTask)
+                }
             )
         }
     }
@@ -263,10 +309,13 @@ fun Sidebar(selectedScreen: String, onScreenSelected: (String) -> Unit) {
 
         // Calendar button
         IconButton(
-            onClick = { /* Calendar logic to be implemented */ },
+            onClick = { onScreenSelected("Calendar") }, // This will set selectedScreen to Calendar
             modifier = Modifier
                 .size(40.dp)
-                .background(Color.Gray, shape = CircleShape)
+                .background(
+                    if (selectedScreen == "Calendar") Color.LightGray else Color.Gray,
+                    shape = CircleShape
+                )
         ) {
             Icon(Icons.Default.DateRange, contentDescription = "Calendar", tint = Color.White)
         }

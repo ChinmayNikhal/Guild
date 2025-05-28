@@ -129,8 +129,6 @@ fun GroupChatScreen(
                             }
                         )
 
-
-
                         DropdownMenuItem(
                             text = { Text("Leave Group") },
                             onClick = {
@@ -385,6 +383,7 @@ fun InviteUserDialog(groupId: String, onDismiss: () -> Unit, groupViewModel: Gro
         confirmButton = {
             Button(onClick = {
                 groupViewModel.sendGroupInvite(groupId, username)
+                onDismiss()
                 onDismiss()
             }) {
                 Text("Send Invite")
